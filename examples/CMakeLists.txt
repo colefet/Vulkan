@@ -44,6 +44,7 @@ function(buildExamples)
 endfunction(buildExamples)
 
 set(EXAMPLES
+	asynccompute
 	bloom
 	computecloth
 	computecullandlod
