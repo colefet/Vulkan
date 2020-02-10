@@ -208,10 +208,27 @@ public:
 	// One sampler for the frame buffer color attachments
 	VkSampler colorSampler;
 
+	// Resources for the compute part of the example
+	struct Compute {
+		VkQueue queue;								// Separate queue for compute commands (queue family may differ from the one used for graphics)
+		VkCommandPool commandPool;					// Use a separate command pool (queue family may differ from the one used for graphics)
+		VkCommandBuffer commandBuffer;				// Command buffer storing the dispatch commands and barriers
+		VkFence fence;								// Synchronization fence to avoid rewriting compute CB if still in use
+		VkDescriptorSetLayout descriptorSetLayout;	// Compute shader binding layout
+		VkDescriptorSet descriptorSet;				// Compute shader bindings
+		VkPipelineLayout pipelineLayout;			// Layout of the compute pipeline
+		std::vector<VkPipeline> pipelines;			// Compute pipelines for image filters
+		int32_t pipelineIndex = 0;					// Current image filtering compute pipeline index
+		uint32_t queueFamilyIndex;					// Family index of the graphics queue, used for barriers
+	} compute;
+
 	VulkanExample() : VulkanExampleBase(ENABLE_VALIDATION)
 	{
 		title = "Async compute";
 		settings.overlay = true;
+
+		timerSpeed *= 0.1f;
+		
 		camera.type = Camera::CameraType::firstperson;
 		camera.movementSpeed = 5.0f;
 #ifndef __ANDROID__
@@ -680,6 +697,88 @@ public:
 		VK_CHECK_RESULT(vkCreateSampler(device, &sampler, nullptr, &colorSampler));
 	}
 
+	// Prepare a texture target that is used to store compute shader calculations
+	void prepareTextureTarget(vks::Texture* tex, uint32_t width, uint32_t height, VkFormat format)
+	{
+		VkFormatProperties formatProperties;
+
+		// Get device properties for the requested texture format
+		vkGetPhysicalDeviceFormatProperties(physicalDevice, format, &formatProperties);
+		// Check if requested image format supports image storage operations
+		assert(formatProperties.optimalTilingFeatures & VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT);
+
+		// Prepare blit target texture
+		tex->width = width;
+		tex->height = height;
+
+		VkImageCreateInfo imageCreateInfo = vks::initializers::imageCreateInfo();
+		imageCreateInfo.imageType = VK_IMAGE_TYPE_2D;
+		imageCreateInfo.format = format;
+		imageCreateInfo.extent = { width, height, 1 };
+		imageCreateInfo.mipLevels = 1;
+		imageCreateInfo.arrayLayers = 1;
+		imageCreateInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+		imageCreateInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+		// Image will be sampled in the fragment shader and used as storage target in the compute shader
+		imageCreateInfo.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT;
+		imageCreateInfo.flags = 0;
+		// Sharing mode exclusive means that ownership of the image does not need to be explicitly transferred between the compute and graphics queue
+		imageCreateInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+		VkMemoryAllocateInfo memAllocInfo = vks::initializers::memoryAllocateInfo();
+		VkMemoryRequirements memReqs;
+
+		VK_CHECK_RESULT(vkCreateImage(device, &imageCreateInfo, nullptr, &tex->image));
+
+		vkGetImageMemoryRequirements(device, tex->image, &memReqs);
+		memAllocInfo.allocationSize = memReqs.size;
+		memAllocInfo.memoryTypeIndex = vulkanDevice->getMemoryType(memReqs.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+		VK_CHECK_RESULT(vkAllocateMemory(device, &memAllocInfo, nullptr, &tex->deviceMemory));
+		VK_CHECK_RESULT(vkBindImageMemory(device, tex->image, tex->deviceMemory, 0));
+
+		VkCommandBuffer layoutCmd = VulkanExampleBase::createCommandBuffer(VK_COMMAND_BUFFER_LEVEL_PRIMARY, true);
+
+		tex->imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+		vks::tools::setImageLayout(
+			layoutCmd, tex->image,
+			VK_IMAGE_ASPECT_COLOR_BIT,
+			VK_IMAGE_LAYOUT_UNDEFINED,
+			tex->imageLayout);
+
+		VulkanExampleBase::flushCommandBuffer(layoutCmd, queue, true);
+
+		// Create sampler
+		VkSamplerCreateInfo sampler = vks::initializers::samplerCreateInfo();
+		sampler.magFilter = VK_FILTER_LINEAR;
+		sampler.minFilter = VK_FILTER_LINEAR;
+		sampler.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+		sampler.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
+		sampler.addressModeV = sampler.addressModeU;
+		sampler.addressModeW = sampler.addressModeU;
+		sampler.mipLodBias = 0.0f;
+		sampler.maxAnisotropy = 1.0f;
+		sampler.compareOp = VK_COMPARE_OP_NEVER;
+		sampler.minLod = 0.0f;
+		sampler.maxLod = tex->mipLevels;
+		sampler.borderColor = VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE;
+		VK_CHECK_RESULT(vkCreateSampler(device, &sampler, nullptr, &tex->sampler));
+
+		// Create image view
+		VkImageViewCreateInfo view = vks::initializers::imageViewCreateInfo();
+		view.image = VK_NULL_HANDLE;
+		view.viewType = VK_IMAGE_VIEW_TYPE_2D;
+		view.format = format;
+		view.components = { VK_COMPONENT_SWIZZLE_R, VK_COMPONENT_SWIZZLE_G, VK_COMPONENT_SWIZZLE_B, VK_COMPONENT_SWIZZLE_A };
+		view.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+		view.image = tex->image;
+		VK_CHECK_RESULT(vkCreateImageView(device, &view, nullptr, &tex->view));
+
+		// Initialize a descriptor for later use
+		tex->descriptor.imageLayout = tex->imageLayout;
+		tex->descriptor.imageView = tex->view;
+		tex->descriptor.sampler = tex->sampler;
+		tex->device = vulkanDevice;
+	}
 	void loadAssets()
 	{
 		vks::ModelCreateInfo modelCreateInfo;
@@ -735,7 +834,134 @@ public:
 
 		models.quad.device = device;
 	}
+	// Find and create a compute capable device queue
+	void getComputeQueue()
+	{
+		uint32_t queueFamilyCount;
+		vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice, &queueFamilyCount, NULL);
+		assert(queueFamilyCount >= 1);
 
+		std::vector<VkQueueFamilyProperties> queueFamilyProperties;
+		queueFamilyProperties.resize(queueFamilyCount);
+		vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice, &queueFamilyCount, queueFamilyProperties.data());
+
+		// Some devices have dedicated compute queues, so we first try to find a queue that supports compute and not graphics
+		bool computeQueueFound = false;
+		for (uint32_t i = 0; i < static_cast<uint32_t>(queueFamilyProperties.size()); i++)
+		{
+			if ((queueFamilyProperties[i].queueFlags & VK_QUEUE_COMPUTE_BIT) && ((queueFamilyProperties[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) == 0))
+			{
+				compute.queueFamilyIndex = i;
+				computeQueueFound = true;
+				break;
+			}
+		}
+		// If there is no dedicated compute queue, just find the first queue family that supports compute
+		if (!computeQueueFound)
+		{
+			for (uint32_t i = 0; i < static_cast<uint32_t>(queueFamilyProperties.size()); i++)
+			{
+				if (queueFamilyProperties[i].queueFlags & VK_QUEUE_COMPUTE_BIT)
+				{
+					compute.queueFamilyIndex = i;
+					computeQueueFound = true;
+					break;
+				}
+			}
+		}
+
+		// Compute is mandatory in Vulkan, so there must be at least one queue family that supports compute
+		assert(computeQueueFound);
+		// Get a compute queue from the device
+		vkGetDeviceQueue(device, compute.queueFamilyIndex, 0, &compute.queue);
+	}
+	/*void buildComputeCommandBuffer()
+	{
+		// Flush the queue if we're rebuilding the command buffer after a pipeline change to ensure it's not currently in use
+		vkQueueWaitIdle(compute.queue);
+
+		VkCommandBufferBeginInfo cmdBufInfo = vks::initializers::commandBufferBeginInfo();
+
+		VK_CHECK_RESULT(vkBeginCommandBuffer(compute.commandBuffer, &cmdBufInfo));
+
+		vkCmdBindPipeline(compute.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, compute.pipelines[compute.pipelineIndex]);
+		vkCmdBindDescriptorSets(compute.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, compute.pipelineLayout, 0, 1, &compute.descriptorSet, 0, 0);
+
+		vkCmdDispatch(compute.commandBuffer, textureComputeTarget.width / 16, textureComputeTarget.height / 16, 1);
+
+		vkEndCommandBuffer(compute.commandBuffer);
+	}
+	
+	void prepareCompute()
+	{
+		getComputeQueue();
+
+		// Create compute pipeline
+		// Compute pipelines are created separate from graphics pipelines even if they use the same queue
+
+		std::vector<VkDescriptorSetLayoutBinding> setLayoutBindings = {
+			// Binding 0: Input image (read-only)
+			vks::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_SHADER_STAGE_COMPUTE_BIT, 0),
+			// Binding 1: Output image (write)
+			vks::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_SHADER_STAGE_COMPUTE_BIT, 1),
+		};
+
+		VkDescriptorSetLayoutCreateInfo descriptorLayout = vks::initializers::descriptorSetLayoutCreateInfo(setLayoutBindings);
+		VK_CHECK_RESULT(vkCreateDescriptorSetLayout(device, &descriptorLayout, nullptr, &compute.descriptorSetLayout));
+
+		VkPipelineLayoutCreateInfo pPipelineLayoutCreateInfo =
+			vks::initializers::pipelineLayoutCreateInfo(&compute.descriptorSetLayout, 1);
+
+		VK_CHECK_RESULT(vkCreatePipelineLayout(device, &pPipelineLayoutCreateInfo, nullptr, &compute.pipelineLayout));
+
+		VkDescriptorSetAllocateInfo allocInfo =
+			vks::initializers::descriptorSetAllocateInfo(descriptorPool, &compute.descriptorSetLayout, 1);
+
+		VK_CHECK_RESULT(vkAllocateDescriptorSets(device, &allocInfo, &compute.descriptorSet));
+		std::vector<VkWriteDescriptorSet> computeWriteDescriptorSets = {
+			vks::initializers::writeDescriptorSet(compute.descriptorSet, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 0, &textureColorMap.descriptor),
+			vks::initializers::writeDescriptorSet(compute.descriptorSet, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, &textureComputeTarget.descriptor)
+		};
+		vkUpdateDescriptorSets(device, computeWriteDescriptorSets.size(), computeWriteDescriptorSets.data(), 0, NULL);
+
+		// Create compute shader pipelines
+		VkComputePipelineCreateInfo computePipelineCreateInfo =
+			vks::initializers::computePipelineCreateInfo(compute.pipelineLayout, 0);
+
+		// One pipeline for each effect
+		shaderNames = { "emboss", "edgedetect", "sharpen" };
+		for (auto& shaderName : shaderNames) {
+			std::string fileName = getAssetPath() + "shaders/computeshader/" + shaderName + ".comp.spv";
+			computePipelineCreateInfo.stage = loadShader(fileName, VK_SHADER_STAGE_COMPUTE_BIT);
+			VkPipeline pipeline;
+			VK_CHECK_RESULT(vkCreateComputePipelines(device, pipelineCache, 1, &computePipelineCreateInfo, nullptr, &pipeline));
+			compute.pipelines.push_back(pipeline);
+		}
+
+		// Separate command pool as queue family for compute may be different than graphics
+		VkCommandPoolCreateInfo cmdPoolInfo = {};
+		cmdPoolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+		cmdPoolInfo.queueFamilyIndex = compute.queueFamilyIndex;
+		cmdPoolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+		VK_CHECK_RESULT(vkCreateCommandPool(device, &cmdPoolInfo, nullptr, &compute.commandPool));
+
+		// Create a command buffer for compute operations
+		VkCommandBufferAllocateInfo cmdBufAllocateInfo =
+			vks::initializers::commandBufferAllocateInfo(
+				compute.commandPool,
+				VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+				1);
+
+		VK_CHECK_RESULT(vkAllocateCommandBuffers(device, &cmdBufAllocateInfo, &compute.commandBuffer));
+
+		// Fence for compute CB sync
+		VkFenceCreateInfo fenceCreateInfo = vks::initializers::fenceCreateInfo(VK_FENCE_CREATE_SIGNALED_BIT);
+		VK_CHECK_RESULT(vkCreateFence(device, &fenceCreateInfo, nullptr, &compute.fence));
+
+		// Build a single command buffer containing the compute dispatch commands
+		buildComputeCommandBuffer();
+	}*/
+	
 	void buildCommandBuffers()
 	{
 		VkCommandBufferBeginInfo cmdBufInfo = vks::initializers::commandBufferBeginInfo();
@@ -745,45 +971,6 @@ public:
 		for (int32_t i = 0; i < drawCmdBuffers.size(); ++i)
 		{
 			VK_CHECK_RESULT(vkBeginCommandBuffer(drawCmdBuffers[i], &cmdBufInfo));
-
-			/*
-			render pass: Generate shadow map by rendering the scene from light's POV
-			*/
-			{
-				VkClearValue clearValues[2];
-				VkViewport viewport;
-				VkRect2D scissor;
-
-				clearValues[0].depthStencil = { 1.0f, 0 };
-
-				VkRenderPassBeginInfo renderPassBeginInfo = vks::initializers::renderPassBeginInfo();
-				renderPassBeginInfo.renderPass = frameBuffers.sceneShadow.renderPass;
-				renderPassBeginInfo.framebuffer = frameBuffers.sceneShadow.frameBuffer;
-				renderPassBeginInfo.renderArea.extent.width = frameBuffers.sceneShadow.width;
-				renderPassBeginInfo.renderArea.extent.height = frameBuffers.sceneShadow.height;
-				renderPassBeginInfo.clearValueCount = 1;
-				renderPassBeginInfo.pClearValues = clearValues;
-
-				vkCmdBeginRenderPass(drawCmdBuffers[i], &renderPassBeginInfo, VK_SUBPASS_CONTENTS_INLINE);
-
-				viewport = vks::initializers::viewport((float)frameBuffers.sceneShadow.width, (float)frameBuffers.sceneShadow.height, 0.0f, 1.0f);
-				vkCmdSetViewport(drawCmdBuffers[i], 0, 1, &viewport);
-
-				scissor = vks::initializers::rect2D(frameBuffers.sceneShadow.width, frameBuffers.sceneShadow.height, 0, 0);
-				vkCmdSetScissor(drawCmdBuffers[i], 0, 1, &scissor);
-
-				// Set depth bias (aka "Polygon offset")
-				// Required to avoid shadow mapping artefacts
-				vkCmdSetDepthBias(drawCmdBuffers[i],depthBiasConstant,0.0f,depthBiasSlope);
-
-				vkCmdBindPipeline(drawCmdBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, pipelines.sceneShadow);
-				vkCmdBindDescriptorSets(drawCmdBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayouts.sceneShadow, 0, 1, &descriptorSets.sceneShadow, 0, NULL);
-				vkCmdBindVertexBuffers(drawCmdBuffers[i], 0, 1, &models.scene.vertices.buffer, offsets);
-				vkCmdBindIndexBuffer(drawCmdBuffers[i], models.scene.indices.buffer, 0, VK_INDEX_TYPE_UINT32);
-				vkCmdDrawIndexed(drawCmdBuffers[i], models.scene.indexCount, 1, 0, 0, 0);
-
-				vkCmdEndRenderPass(drawCmdBuffers[i]);
-			}
 
 			/*
 				Offscreen SSAO generation
@@ -832,14 +1019,56 @@ public:
 				vkCmdDrawIndexed(drawCmdBuffers[i], scenes[0].indexCount, 1, 0, 0, 0);*/
 
 				vkCmdEndRenderPass(drawCmdBuffers[i]);
+			}
 
+			/*
+			render pass: Generate shadow map by rendering the scene from light's POV
+			*/
+			{
+				VkClearValue clearValues[2];
+				VkViewport viewport;
+				VkRect2D scissor;
+
+				clearValues[0].depthStencil = { 1.0f, 0 };
+
+				VkRenderPassBeginInfo renderPassBeginInfo = vks::initializers::renderPassBeginInfo();
+				renderPassBeginInfo.renderPass = frameBuffers.sceneShadow.renderPass;
+				renderPassBeginInfo.framebuffer = frameBuffers.sceneShadow.frameBuffer;
+				renderPassBeginInfo.renderArea.extent.width = frameBuffers.sceneShadow.width;
+				renderPassBeginInfo.renderArea.extent.height = frameBuffers.sceneShadow.height;
+				renderPassBeginInfo.clearValueCount = 1;
+				renderPassBeginInfo.pClearValues = clearValues;
+
+				vkCmdBeginRenderPass(drawCmdBuffers[i], &renderPassBeginInfo, VK_SUBPASS_CONTENTS_INLINE);
+
+				viewport = vks::initializers::viewport((float)frameBuffers.sceneShadow.width, (float)frameBuffers.sceneShadow.height, 0.0f, 1.0f);
+				vkCmdSetViewport(drawCmdBuffers[i], 0, 1, &viewport);
+
+				scissor = vks::initializers::rect2D(frameBuffers.sceneShadow.width, frameBuffers.sceneShadow.height, 0, 0);
+				vkCmdSetScissor(drawCmdBuffers[i], 0, 1, &scissor);
+
+				// Set depth bias (aka "Polygon offset")
+				// Required to avoid shadow mapping artefacts
+				vkCmdSetDepthBias(drawCmdBuffers[i], depthBiasConstant, 0.0f, depthBiasSlope);
+
+				vkCmdBindPipeline(drawCmdBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, pipelines.sceneShadow);
+				vkCmdBindDescriptorSets(drawCmdBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayouts.sceneShadow, 0, 1, &descriptorSets.sceneShadow, 0, NULL);
+				vkCmdBindVertexBuffers(drawCmdBuffers[i], 0, 1, &models.scene.vertices.buffer, offsets);
+				vkCmdBindIndexBuffer(drawCmdBuffers[i], models.scene.indices.buffer, 0, VK_INDEX_TYPE_UINT32);
+				vkCmdDrawIndexed(drawCmdBuffers[i], models.scene.indexCount, 1, 0, 0, 0);
+
+				vkCmdEndRenderPass(drawCmdBuffers[i]);
+			}
+			{
 				/*
 					Second pass: SSAO generation
 				*/
-
+				// Clear values for all attachments written in the fragment sahder
+				std::vector<VkClearValue> clearValues(2);
 				clearValues[0].color = { { 0.0f, 0.0f, 0.0f, 1.0f } };
 				clearValues[1].depthStencil = { 1.0f, 0 };
 
+				VkRenderPassBeginInfo renderPassBeginInfo = vks::initializers::renderPassBeginInfo();
 				renderPassBeginInfo.framebuffer = frameBuffers.ssao.frameBuffer;
 				renderPassBeginInfo.renderPass = frameBuffers.ssao.renderPass;
 				renderPassBeginInfo.renderArea.extent.width = frameBuffers.ssao.width;
@@ -849,9 +1078,9 @@ public:
 
 				vkCmdBeginRenderPass(drawCmdBuffers[i], &renderPassBeginInfo, VK_SUBPASS_CONTENTS_INLINE);
 
-				viewport = vks::initializers::viewport((float)frameBuffers.ssao.width, (float)frameBuffers.ssao.height, 0.0f, 1.0f);
+				VkViewport viewport = vks::initializers::viewport((float)frameBuffers.ssao.width, (float)frameBuffers.ssao.height, 0.0f, 1.0f);
 				vkCmdSetViewport(drawCmdBuffers[i], 0, 1, &viewport);
-				scissor = vks::initializers::rect2D(frameBuffers.ssao.width, frameBuffers.ssao.height, 0, 0);
+				VkRect2D scissor = vks::initializers::rect2D(frameBuffers.ssao.width, frameBuffers.ssao.height, 0, 0);
 				vkCmdSetScissor(drawCmdBuffers[i], 0, 1, &scissor);
 
 				vkCmdBindDescriptorSets(drawCmdBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayouts.ssao, 0, 1, &descriptorSets.ssao, 0, NULL);
@@ -859,21 +1088,30 @@ public:
 				vkCmdDraw(drawCmdBuffers[i], 3, 1, 0, 0);
 
 				vkCmdEndRenderPass(drawCmdBuffers[i]);
-
+			}
+			{
 				/*
 					Third pass: SSAO blur
 				*/
+				
+				// Clear values for all attachments written in the fragment sahder
+				std::vector<VkClearValue> clearValues(2);
+				clearValues[0].color = { { 0.0f, 0.0f, 0.0f, 1.0f } };
+				clearValues[1].depthStencil = { 1.0f, 0 };
 
+				VkRenderPassBeginInfo renderPassBeginInfo = vks::initializers::renderPassBeginInfo();
 				renderPassBeginInfo.framebuffer = frameBuffers.ssaoBlur.frameBuffer;
 				renderPassBeginInfo.renderPass = frameBuffers.ssaoBlur.renderPass;
 				renderPassBeginInfo.renderArea.extent.width = frameBuffers.ssaoBlur.width;
 				renderPassBeginInfo.renderArea.extent.height = frameBuffers.ssaoBlur.height;
+				renderPassBeginInfo.clearValueCount = 2;
+				renderPassBeginInfo.pClearValues = clearValues.data();	
 
 				vkCmdBeginRenderPass(drawCmdBuffers[i], &renderPassBeginInfo, VK_SUBPASS_CONTENTS_INLINE);
 
-				viewport = vks::initializers::viewport((float)frameBuffers.ssaoBlur.width, (float)frameBuffers.ssaoBlur.height, 0.0f, 1.0f);
+				VkViewport viewport = vks::initializers::viewport((float)frameBuffers.ssaoBlur.width, (float)frameBuffers.ssaoBlur.height, 0.0f, 1.0f);
 				vkCmdSetViewport(drawCmdBuffers[i], 0, 1, &viewport);
-				scissor = vks::initializers::rect2D(frameBuffers.ssaoBlur.width, frameBuffers.ssaoBlur.height, 0, 0);
+				VkRect2D scissor = vks::initializers::rect2D(frameBuffers.ssaoBlur.width, frameBuffers.ssaoBlur.height, 0, 0);
 				vkCmdSetScissor(drawCmdBuffers[i], 0, 1, &scissor);
 
 				vkCmdBindDescriptorSets(drawCmdBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayouts.ssaoBlur, 0, 1, &descriptorSets.ssaoBlur, 0, NULL);
@@ -1337,9 +1575,10 @@ public:
 	void updateLight()
 	{
 		// Animate the light source
-		lightPos.x = cos(glm::radians(timer * 360.0f)) * 10.0f;
+		/*lightPos.x = cos(glm::radians(timer * 360.0f)) * 10.0f;
 		lightPos.y = 5.0f+sin(glm::radians(timer * 720.0f)) * 2.0f;
-		lightPos.z = sin(glm::radians(timer * 360.0f)) * 3.0f;
+		lightPos.z = sin(glm::radians(timer * 360.0f)) * 3.0f;*/
+		lightPos = glm::vec3( -10.0f, 3.0f + cos(glm::radians(timer * 360.0f)) * 3.0f, sin(glm::radians(timer * 360.0f)) * 1.0f);
 	}
 	void updateUniformBufferSceneShadow()
 	{
@@ -1417,10 +1656,12 @@ public:
 		loadAssets();
 		generateQuad();
 		prepareOffscreenFramebuffers();
+		//prepareTextureTarget(&textureComputeTarget, textureColorMap.width, textureColorMap.height, VK_FORMAT_R8G8B8A8_UNORM);
 		prepareUniformBuffers();
 		setupDescriptorPool();
 		setupLayoutsAndDescriptors();
 		preparePipelines();
+		//prepareCompute();
 		buildCommandBuffers();
 		prepared = true;
 	}
