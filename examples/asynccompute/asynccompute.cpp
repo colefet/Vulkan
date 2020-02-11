@@ -133,7 +133,7 @@ public:
 	} pipelineLayouts;
 
 	struct {
-		const uint32_t count = 8;
+		const uint32_t count = 8+2;
 		VkDescriptorSet sceneShadow;
 		VkDescriptorSet shadowQuad;
 		VkDescriptorSet modelWithShadow;
@@ -208,17 +208,28 @@ public:
 	// One sampler for the frame buffer color attachments
 	VkSampler colorSampler;
 
+
 	// Resources for the compute part of the example
+	bool AsyncCompute = false;
+	struct {
+		vks::Texture2D textureSSAO;					// Result texture
+		VkDescriptorSetLayout descriptorSetLayout;	// Compute shader binding layout
+		VkDescriptorSet descriptorSet;				// Compute shader bindings
+		VkPipelineLayout pipelineLayout;			// Layout of the compute pipeline
+		VkPipeline pipeline;						// Compute pipelines
+	} Compute_SSAO;
+	struct {
+		vks::Texture2D texture;						// Result texture
+		VkDescriptorSetLayout descriptorSetLayout;	// Compute shader binding layout
+		VkDescriptorSet descriptorSet;				// Compute shader bindings
+		VkPipelineLayout pipelineLayout;			// Layout of the compute pipeline
+		VkPipeline pipeline;						// Compute pipelines
+	} Compute_SSAOBlur;
 	struct Compute {
 		VkQueue queue;								// Separate queue for compute commands (queue family may differ from the one used for graphics)
 		VkCommandPool commandPool;					// Use a separate command pool (queue family may differ from the one used for graphics)
 		VkCommandBuffer commandBuffer;				// Command buffer storing the dispatch commands and barriers
 		VkFence fence;								// Synchronization fence to avoid rewriting compute CB if still in use
-		VkDescriptorSetLayout descriptorSetLayout;	// Compute shader binding layout
-		VkDescriptorSet descriptorSet;				// Compute shader bindings
-		VkPipelineLayout pipelineLayout;			// Layout of the compute pipeline
-		std::vector<VkPipeline> pipelines;			// Compute pipelines for image filters
-		int32_t pipelineIndex = 0;					// Current image filtering compute pipeline index
 		uint32_t queueFamilyIndex;					// Family index of the graphics queue, used for barriers
 	} compute;
 
@@ -779,6 +790,7 @@ public:
 		tex->descriptor.sampler = tex->sampler;
 		tex->device = vulkanDevice;
 	}
+
 	void loadAssets()
 	{
 		vks::ModelCreateInfo modelCreateInfo;
@@ -835,7 +847,7 @@ public:
 		models.quad.device = device;
 	}
 	// Find and create a compute capable device queue
-	void getComputeQueue()
+	void GetComputeQueue()
 	{
 		uint32_t queueFamilyCount;
 		vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice, &queueFamilyCount, NULL);
@@ -875,7 +887,7 @@ public:
 		// Get a compute queue from the device
 		vkGetDeviceQueue(device, compute.queueFamilyIndex, 0, &compute.queue);
 	}
-	/*void buildComputeCommandBuffer()
+	void buildComputeCommandBuffer()
 	{
 		// Flush the queue if we're rebuilding the command buffer after a pipeline change to ensure it's not currently in use
 		vkQueueWaitIdle(compute.queue);
@@ -884,59 +896,138 @@ public:
 
 		VK_CHECK_RESULT(vkBeginCommandBuffer(compute.commandBuffer, &cmdBufInfo));
 
-		vkCmdBindPipeline(compute.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, compute.pipelines[compute.pipelineIndex]);
-		vkCmdBindDescriptorSets(compute.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, compute.pipelineLayout, 0, 1, &compute.descriptorSet, 0, 0);
+		// Image memory barrier to make sure that compute shader writes are finished before sampling from the texture
+		VkImageMemoryBarrier imageMemoryBarrier = {};
+		imageMemoryBarrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+		// We won't be changing the layout of the image
+		imageMemoryBarrier.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+		imageMemoryBarrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+		imageMemoryBarrier.image = frameBuffers.offscreen.depth.image;
+		imageMemoryBarrier.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+		imageMemoryBarrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+		imageMemoryBarrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+		vkCmdPipelineBarrier(compute.commandBuffer, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_FLAGS_NONE,
+			0, nullptr, 
+			0, nullptr, 
+			1, &imageMemoryBarrier);
+		
+		//ssao
+		vkCmdBindPipeline(compute.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, Compute_SSAO.pipeline);
+		vkCmdBindDescriptorSets(compute.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, Compute_SSAO.pipelineLayout, 0, 1, &Compute_SSAO.descriptorSet, 0, 0);
+		vkCmdDispatch(compute.commandBuffer, Compute_SSAO.textureSSAO.width / 16, Compute_SSAO.textureSSAO.height / 16, 1);
 
-		vkCmdDispatch(compute.commandBuffer, textureComputeTarget.width / 16, textureComputeTarget.height / 16, 1);
+		// Add memory barrier to ensure that the computer shader has finished writing to the buffer
+		VkImageMemoryBarrier ssao_barrier = vks::initializers::imageMemoryBarrier();
+		// We won't be changing the layout of the image
+		ssao_barrier.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+		ssao_barrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+		ssao_barrier.image = Compute_SSAO.textureSSAO.image;
+		ssao_barrier.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+		ssao_barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+		ssao_barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+		vkCmdPipelineBarrier(
+			compute.commandBuffer,
+			VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+			VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+			VK_FLAGS_NONE,
+			0, nullptr,
+			0, nullptr,
+			1, &ssao_barrier);
+		
+		//ssao blur
+		vkCmdBindPipeline(compute.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, Compute_SSAOBlur.pipeline);
+		vkCmdBindDescriptorSets(compute.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, Compute_SSAOBlur.pipelineLayout, 0, 1, &Compute_SSAOBlur.descriptorSet, 0, 0);
+		vkCmdDispatch(compute.commandBuffer, Compute_SSAOBlur.texture.width / 16, Compute_SSAOBlur.texture.height / 16, 1);
 
 		vkEndCommandBuffer(compute.commandBuffer);
 	}
-	
-	void prepareCompute()
+
+	void BuildComputeSSAO()
 	{
-		getComputeQueue();
-
-		// Create compute pipeline
-		// Compute pipelines are created separate from graphics pipelines even if they use the same queue
-
+		// Prepare a texture target that is used to store compute shader calculations
+		prepareTextureTarget(&Compute_SSAO.textureSSAO, frameBuffers.offscreen.width, frameBuffers.offscreen.height, VK_FORMAT_R8G8B8A8_UNORM);
+		
 		std::vector<VkDescriptorSetLayoutBinding> setLayoutBindings = {
 			// Binding 0: Input image (read-only)
-			vks::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_SHADER_STAGE_COMPUTE_BIT, 0),
+			vks::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_SHADER_STAGE_COMPUTE_BIT, 0),// Position+Depth
+			vks::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_SHADER_STAGE_COMPUTE_BIT, 1),// Normals
+			vks::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_SHADER_STAGE_COMPUTE_BIT, 2),// SSAO Noise
+			vks::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_SHADER_STAGE_COMPUTE_BIT, 3),// SSAO Kernel UBO
+			vks::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_SHADER_STAGE_COMPUTE_BIT, 4),// Params UBO 
+			// Binding 1: Output image (write)
+			vks::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_SHADER_STAGE_COMPUTE_BIT, 5),
+		};
+
+		VkDescriptorSetLayoutCreateInfo descriptorLayout = vks::initializers::descriptorSetLayoutCreateInfo(setLayoutBindings);
+		VK_CHECK_RESULT(vkCreateDescriptorSetLayout(device, &descriptorLayout, nullptr, &Compute_SSAO.descriptorSetLayout));
+
+		VkPipelineLayoutCreateInfo pPipelineLayoutCreateInfo = vks::initializers::pipelineLayoutCreateInfo(&Compute_SSAO.descriptorSetLayout, 1);
+		VK_CHECK_RESULT(vkCreatePipelineLayout(device, &pPipelineLayoutCreateInfo, nullptr, &Compute_SSAO.pipelineLayout));
+
+		VkDescriptorSetAllocateInfo allocInfo = vks::initializers::descriptorSetAllocateInfo(descriptorPool, &Compute_SSAO.descriptorSetLayout, 1);
+		VK_CHECK_RESULT(vkAllocateDescriptorSets(device, &allocInfo, &Compute_SSAO.descriptorSet));
+
+		std::vector<VkDescriptorImageInfo> imageDescriptors = {
+		vks::initializers::descriptorImageInfo(colorSampler, frameBuffers.offscreen.position.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL),
+		vks::initializers::descriptorImageInfo(colorSampler, frameBuffers.offscreen.normal.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL),
+		};
+		std::vector<VkWriteDescriptorSet> computeWriteDescriptorSets = {
+			vks::initializers::writeDescriptorSet(Compute_SSAO.descriptorSet, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 0, &imageDescriptors[0]),
+			vks::initializers::writeDescriptorSet(Compute_SSAO.descriptorSet, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, &imageDescriptors[1]),
+			vks::initializers::writeDescriptorSet(Compute_SSAO.descriptorSet, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 2, &textures.ssaoNoise.descriptor),
+			vks::initializers::writeDescriptorSet(Compute_SSAO.descriptorSet, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 3, &uniformBuffers.ssaoKernel.descriptor),
+			vks::initializers::writeDescriptorSet(Compute_SSAO.descriptorSet, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 4, &uniformBuffers.ssaoParams.descriptor),
+			
+			vks::initializers::writeDescriptorSet(Compute_SSAO.descriptorSet, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 5, &Compute_SSAO.textureSSAO.descriptor)
+		};
+		vkUpdateDescriptorSets(device, computeWriteDescriptorSets.size(), computeWriteDescriptorSets.data(), 0, NULL);
+		// Create compute shader pipelines
+		VkComputePipelineCreateInfo computePipelineCreateInfo =	vks::initializers::computePipelineCreateInfo(Compute_SSAO.pipelineLayout, 0);
+		computePipelineCreateInfo.stage = loadShader(getAssetPath() + "shaders/asynccompute/ssao.comp.spv", VK_SHADER_STAGE_COMPUTE_BIT);
+		VK_CHECK_RESULT(vkCreateComputePipelines(device, pipelineCache, 1, &computePipelineCreateInfo, nullptr, &Compute_SSAO.pipeline));
+	}
+	void BuildComputeSSAOBlur()
+	{
+		// Prepare a texture target that is used to store compute shader calculations
+		prepareTextureTarget(&Compute_SSAOBlur.texture, frameBuffers.offscreen.width, frameBuffers.offscreen.height, VK_FORMAT_R8G8B8A8_UNORM);
+		
+		std::vector<VkDescriptorSetLayoutBinding> setLayoutBindings = {
+			// Binding 0: Input image (read-only)
+			vks::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_SHADER_STAGE_COMPUTE_BIT, 0),// Sampler SSAO
 			// Binding 1: Output image (write)
 			vks::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_SHADER_STAGE_COMPUTE_BIT, 1),
 		};
 
 		VkDescriptorSetLayoutCreateInfo descriptorLayout = vks::initializers::descriptorSetLayoutCreateInfo(setLayoutBindings);
-		VK_CHECK_RESULT(vkCreateDescriptorSetLayout(device, &descriptorLayout, nullptr, &compute.descriptorSetLayout));
+		VK_CHECK_RESULT(vkCreateDescriptorSetLayout(device, &descriptorLayout, nullptr, &Compute_SSAOBlur.descriptorSetLayout));
 
-		VkPipelineLayoutCreateInfo pPipelineLayoutCreateInfo =
-			vks::initializers::pipelineLayoutCreateInfo(&compute.descriptorSetLayout, 1);
+		VkPipelineLayoutCreateInfo pPipelineLayoutCreateInfo = vks::initializers::pipelineLayoutCreateInfo(&Compute_SSAOBlur.descriptorSetLayout, 1);
+		VK_CHECK_RESULT(vkCreatePipelineLayout(device, &pPipelineLayoutCreateInfo, nullptr, &Compute_SSAOBlur.pipelineLayout));
 
-		VK_CHECK_RESULT(vkCreatePipelineLayout(device, &pPipelineLayoutCreateInfo, nullptr, &compute.pipelineLayout));
+		VkDescriptorSetAllocateInfo allocInfo = vks::initializers::descriptorSetAllocateInfo(descriptorPool, &Compute_SSAOBlur.descriptorSetLayout, 1);
+		VK_CHECK_RESULT(vkAllocateDescriptorSets(device, &allocInfo, &Compute_SSAOBlur.descriptorSet));
 
-		VkDescriptorSetAllocateInfo allocInfo =
-			vks::initializers::descriptorSetAllocateInfo(descriptorPool, &compute.descriptorSetLayout, 1);
 
-		VK_CHECK_RESULT(vkAllocateDescriptorSets(device, &allocInfo, &compute.descriptorSet));
 		std::vector<VkWriteDescriptorSet> computeWriteDescriptorSets = {
-			vks::initializers::writeDescriptorSet(compute.descriptorSet, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 0, &textureColorMap.descriptor),
-			vks::initializers::writeDescriptorSet(compute.descriptorSet, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, &textureComputeTarget.descriptor)
+			vks::initializers::writeDescriptorSet(Compute_SSAOBlur.descriptorSet, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 0, &Compute_SSAO.textureSSAO.descriptor),
+
+			vks::initializers::writeDescriptorSet(Compute_SSAOBlur.descriptorSet, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, &Compute_SSAOBlur.texture.descriptor)
 		};
 		vkUpdateDescriptorSets(device, computeWriteDescriptorSets.size(), computeWriteDescriptorSets.data(), 0, NULL);
-
 		// Create compute shader pipelines
-		VkComputePipelineCreateInfo computePipelineCreateInfo =
-			vks::initializers::computePipelineCreateInfo(compute.pipelineLayout, 0);
+		VkComputePipelineCreateInfo computePipelineCreateInfo = vks::initializers::computePipelineCreateInfo(Compute_SSAOBlur.pipelineLayout, 0);
+		computePipelineCreateInfo.stage = loadShader(getAssetPath() + "shaders/asynccompute/blur.comp.spv", VK_SHADER_STAGE_COMPUTE_BIT);
+		VK_CHECK_RESULT(vkCreateComputePipelines(device, pipelineCache, 1, &computePipelineCreateInfo, nullptr, &Compute_SSAOBlur.pipeline));
+	}
+	
+	void prepareCompute()
+	{
+		GetComputeQueue();
 
-		// One pipeline for each effect
-		shaderNames = { "emboss", "edgedetect", "sharpen" };
-		for (auto& shaderName : shaderNames) {
-			std::string fileName = getAssetPath() + "shaders/computeshader/" + shaderName + ".comp.spv";
-			computePipelineCreateInfo.stage = loadShader(fileName, VK_SHADER_STAGE_COMPUTE_BIT);
-			VkPipeline pipeline;
-			VK_CHECK_RESULT(vkCreateComputePipelines(device, pipelineCache, 1, &computePipelineCreateInfo, nullptr, &pipeline));
-			compute.pipelines.push_back(pipeline);
-		}
+		// Create compute pipeline
+		// Compute pipelines are created separate from graphics pipelines even if they use the same queue
+		BuildComputeSSAO();
+		BuildComputeSSAOBlur();
 
 		// Separate command pool as queue family for compute may be different than graphics
 		VkCommandPoolCreateInfo cmdPoolInfo = {};
@@ -960,7 +1051,7 @@ public:
 
 		// Build a single command buffer containing the compute dispatch commands
 		buildComputeCommandBuffer();
-	}*/
+	}
 	
 	void buildCommandBuffers()
 	{
@@ -1059,68 +1150,85 @@ public:
 
 				vkCmdEndRenderPass(drawCmdBuffers[i]);
 			}
+			
+			if (AsyncCompute)
 			{
-				/*
-					Second pass: SSAO generation
-				*/
-				// Clear values for all attachments written in the fragment sahder
-				std::vector<VkClearValue> clearValues(2);
-				clearValues[0].color = { { 0.0f, 0.0f, 0.0f, 1.0f } };
-				clearValues[1].depthStencil = { 1.0f, 0 };
-
-				VkRenderPassBeginInfo renderPassBeginInfo = vks::initializers::renderPassBeginInfo();
-				renderPassBeginInfo.framebuffer = frameBuffers.ssao.frameBuffer;
-				renderPassBeginInfo.renderPass = frameBuffers.ssao.renderPass;
-				renderPassBeginInfo.renderArea.extent.width = frameBuffers.ssao.width;
-				renderPassBeginInfo.renderArea.extent.height = frameBuffers.ssao.height;
-				renderPassBeginInfo.clearValueCount = 2;
-				renderPassBeginInfo.pClearValues = clearValues.data();
-
-				vkCmdBeginRenderPass(drawCmdBuffers[i], &renderPassBeginInfo, VK_SUBPASS_CONTENTS_INLINE);
-
-				VkViewport viewport = vks::initializers::viewport((float)frameBuffers.ssao.width, (float)frameBuffers.ssao.height, 0.0f, 1.0f);
-				vkCmdSetViewport(drawCmdBuffers[i], 0, 1, &viewport);
-				VkRect2D scissor = vks::initializers::rect2D(frameBuffers.ssao.width, frameBuffers.ssao.height, 0, 0);
-				vkCmdSetScissor(drawCmdBuffers[i], 0, 1, &scissor);
-
-				vkCmdBindDescriptorSets(drawCmdBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayouts.ssao, 0, 1, &descriptorSets.ssao, 0, NULL);
-				vkCmdBindPipeline(drawCmdBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, pipelines.ssao);
-				vkCmdDraw(drawCmdBuffers[i], 3, 1, 0, 0);
-
-				vkCmdEndRenderPass(drawCmdBuffers[i]);
-			}
+				// Image memory barrier to make sure that compute shader writes are finished before sampling from the texture
+				VkImageMemoryBarrier imageMemoryBarrier = {};
+				imageMemoryBarrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+				// We won't be changing the layout of the image
+				imageMemoryBarrier.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+				imageMemoryBarrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+				imageMemoryBarrier.image = Compute_SSAOBlur.texture.image;
+				imageMemoryBarrier.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+				imageMemoryBarrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+				imageMemoryBarrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+				vkCmdPipelineBarrier(drawCmdBuffers[i], VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_FLAGS_NONE,
+					0, nullptr, 0, nullptr, 1, &imageMemoryBarrier);
+			}else
 			{
-				/*
-					Third pass: SSAO blur
-				*/
-				
-				// Clear values for all attachments written in the fragment sahder
-				std::vector<VkClearValue> clearValues(2);
-				clearValues[0].color = { { 0.0f, 0.0f, 0.0f, 1.0f } };
-				clearValues[1].depthStencil = { 1.0f, 0 };
+				{
+					/*
+						Second pass: SSAO generation
+					*/
+					// Clear values for all attachments written in the fragment sahder
+					std::vector<VkClearValue> clearValues(2);
+					clearValues[0].color = { { 0.0f, 0.0f, 0.0f, 1.0f } };
+					clearValues[1].depthStencil = { 1.0f, 0 };
 
-				VkRenderPassBeginInfo renderPassBeginInfo = vks::initializers::renderPassBeginInfo();
-				renderPassBeginInfo.framebuffer = frameBuffers.ssaoBlur.frameBuffer;
-				renderPassBeginInfo.renderPass = frameBuffers.ssaoBlur.renderPass;
-				renderPassBeginInfo.renderArea.extent.width = frameBuffers.ssaoBlur.width;
-				renderPassBeginInfo.renderArea.extent.height = frameBuffers.ssaoBlur.height;
-				renderPassBeginInfo.clearValueCount = 2;
-				renderPassBeginInfo.pClearValues = clearValues.data();	
+					VkRenderPassBeginInfo renderPassBeginInfo = vks::initializers::renderPassBeginInfo();
+					renderPassBeginInfo.framebuffer = frameBuffers.ssao.frameBuffer;
+					renderPassBeginInfo.renderPass = frameBuffers.ssao.renderPass;
+					renderPassBeginInfo.renderArea.extent.width = frameBuffers.ssao.width;
+					renderPassBeginInfo.renderArea.extent.height = frameBuffers.ssao.height;
+					renderPassBeginInfo.clearValueCount = 2;
+					renderPassBeginInfo.pClearValues = clearValues.data();
 
-				vkCmdBeginRenderPass(drawCmdBuffers[i], &renderPassBeginInfo, VK_SUBPASS_CONTENTS_INLINE);
+					vkCmdBeginRenderPass(drawCmdBuffers[i], &renderPassBeginInfo, VK_SUBPASS_CONTENTS_INLINE);
 
-				VkViewport viewport = vks::initializers::viewport((float)frameBuffers.ssaoBlur.width, (float)frameBuffers.ssaoBlur.height, 0.0f, 1.0f);
-				vkCmdSetViewport(drawCmdBuffers[i], 0, 1, &viewport);
-				VkRect2D scissor = vks::initializers::rect2D(frameBuffers.ssaoBlur.width, frameBuffers.ssaoBlur.height, 0, 0);
-				vkCmdSetScissor(drawCmdBuffers[i], 0, 1, &scissor);
+					VkViewport viewport = vks::initializers::viewport((float)frameBuffers.ssao.width, (float)frameBuffers.ssao.height, 0.0f, 1.0f);
+					vkCmdSetViewport(drawCmdBuffers[i], 0, 1, &viewport);
+					VkRect2D scissor = vks::initializers::rect2D(frameBuffers.ssao.width, frameBuffers.ssao.height, 0, 0);
+					vkCmdSetScissor(drawCmdBuffers[i], 0, 1, &scissor);
 
-				vkCmdBindDescriptorSets(drawCmdBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayouts.ssaoBlur, 0, 1, &descriptorSets.ssaoBlur, 0, NULL);
-				vkCmdBindPipeline(drawCmdBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, pipelines.ssaoBlur);
-				vkCmdDraw(drawCmdBuffers[i], 3, 1, 0, 0);
+					vkCmdBindDescriptorSets(drawCmdBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayouts.ssao, 0, 1, &descriptorSets.ssao, 0, NULL);
+					vkCmdBindPipeline(drawCmdBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, pipelines.ssao);
+					vkCmdDraw(drawCmdBuffers[i], 3, 1, 0, 0);
 
-				vkCmdEndRenderPass(drawCmdBuffers[i]);
+					vkCmdEndRenderPass(drawCmdBuffers[i]);
+				}
+				{
+					/*
+						Third pass: SSAO blur
+					*/
+
+					// Clear values for all attachments written in the fragment sahder
+					std::vector<VkClearValue> clearValues(2);
+					clearValues[0].color = { { 0.0f, 0.0f, 0.0f, 1.0f } };
+					clearValues[1].depthStencil = { 1.0f, 0 };
+
+					VkRenderPassBeginInfo renderPassBeginInfo = vks::initializers::renderPassBeginInfo();
+					renderPassBeginInfo.framebuffer = frameBuffers.ssaoBlur.frameBuffer;
+					renderPassBeginInfo.renderPass = frameBuffers.ssaoBlur.renderPass;
+					renderPassBeginInfo.renderArea.extent.width = frameBuffers.ssaoBlur.width;
+					renderPassBeginInfo.renderArea.extent.height = frameBuffers.ssaoBlur.height;
+					renderPassBeginInfo.clearValueCount = 2;
+					renderPassBeginInfo.pClearValues = clearValues.data();
+
+					vkCmdBeginRenderPass(drawCmdBuffers[i], &renderPassBeginInfo, VK_SUBPASS_CONTENTS_INLINE);
+
+					VkViewport viewport = vks::initializers::viewport((float)frameBuffers.ssaoBlur.width, (float)frameBuffers.ssaoBlur.height, 0.0f, 1.0f);
+					vkCmdSetViewport(drawCmdBuffers[i], 0, 1, &viewport);
+					VkRect2D scissor = vks::initializers::rect2D(frameBuffers.ssaoBlur.width, frameBuffers.ssaoBlur.height, 0, 0);
+					vkCmdSetScissor(drawCmdBuffers[i], 0, 1, &scissor);
+
+					vkCmdBindDescriptorSets(drawCmdBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayouts.ssaoBlur, 0, 1, &descriptorSets.ssaoBlur, 0, NULL);
+					vkCmdBindPipeline(drawCmdBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, pipelines.ssaoBlur);
+					vkCmdDraw(drawCmdBuffers[i], 3, 1, 0, 0);
+
+					vkCmdEndRenderPass(drawCmdBuffers[i]);
+				}
 			}
-
 			/*
 				Note: Explicit synchronization is not required between the render pass, as this is done implicit via sub pass dependencies
 			*/
@@ -1176,7 +1284,9 @@ public:
 	{
 		std::vector<VkDescriptorPoolSize> poolSizes = {
 			vks::initializers::descriptorPoolSize(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 10+3),
-			vks::initializers::descriptorPoolSize(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 12+3)
+			vks::initializers::descriptorPoolSize(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 12+3),
+			vks::initializers::descriptorPoolSize(VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 6),
+			vks::initializers::descriptorPoolSize(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 2)
 		};
 		VkDescriptorPoolCreateInfo descriptorPoolInfo = vks::initializers::descriptorPoolCreateInfo(poolSizes,  descriptorSets.count);
 		VK_CHECK_RESULT(vkCreateDescriptorPool(device, &descriptorPoolInfo, nullptr, &descriptorPool));
@@ -1656,12 +1766,11 @@ public:
 		loadAssets();
 		generateQuad();
 		prepareOffscreenFramebuffers();
-		//prepareTextureTarget(&textureComputeTarget, textureColorMap.width, textureColorMap.height, VK_FORMAT_R8G8B8A8_UNORM);
 		prepareUniformBuffers();
 		setupDescriptorPool();
 		setupLayoutsAndDescriptors();
 		preparePipelines();
-		//prepareCompute();
+		prepareCompute();
 		buildCommandBuffers();
 		prepared = true;
 	}
@@ -1712,8 +1821,8 @@ public:
 			}
 		}
 		if (overlay->header("Async Compute")) {
-			if (overlay->checkBox("Enable Async Compute", &temp)) {
-				//updateUniformBufferSSAOParams();
+			if (overlay->checkBox("Enable Async Compute", &AsyncCompute)) {
+				buildComputeCommandBuffer();
 			}
 		}
 	}
