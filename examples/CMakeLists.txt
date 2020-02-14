@@ -34,6 +34,11 @@ function(buildExample EXAMPLE_NAME)
 	if(RESOURCE_INSTALL_DIR)
 		install(TARGETS ${EXAMPLE_NAME} DESTINATION ${CMAKE_INSTALL_BINDIR})
 	endif()
+	#add_custom_command(TARGET ${EXAMPLE_NAME}
+	#	PRE_BUILD
+	#	COMMAND cd ${CMAKE_CURRENT_SOURCE_DIR}/${SHADER_DIR}
+	#	COMMAND generate-spirv.bat
+	#)
 endfunction(buildExample)
 
 # Build all examples
@@ -44,6 +49,7 @@ function(buildExamples)
 endfunction(buildExamples)
 
 set(EXAMPLES
+	aparticlesystem
 	asynccompute
 	bloom
 	computecloth

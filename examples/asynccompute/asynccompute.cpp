@@ -36,6 +36,7 @@
 #endif
 #define SHADOWMAP_FILTER VK_FILTER_LINEAR
 
+// SSAO properties
 #define SSAO_KERNEL_SIZE 32
 #define SSAO_RADIUS 0.5f
 
