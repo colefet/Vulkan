@@ -46,12 +46,26 @@ public:
 		std::vector<VkVertexInputAttributeDescription> attributeDescriptions;
 	} vertices;
 
+	// Resources for the compute particle updating
+	struct {
+		VkDescriptorSetLayout descriptorSetLayout;	// shader binding layout
+		VkDescriptorSet descriptorSet;				// shader bindings
+		VkPipelineLayout pipelineLayout;			// Layout of pipeline
+		VkPipeline pipeline;						// Compute pipeline
+		void Destroy(VkDevice device)
+		{
+			vkDestroyPipeline(device, pipeline, nullptr);
+			vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
+			vkDestroyDescriptorSetLayout(device, descriptorSetLayout, nullptr);
+		}
+	} SComputeUpdate;
+	
 	// Resources for the graphics part of the example
 	struct {
-		VkDescriptorSetLayout descriptorSetLayout;	// Particle system rendering shader binding layout
-		VkDescriptorSet descriptorSet;				// Particle system rendering shader bindings
-		VkPipelineLayout pipelineLayout;			// Layout of the graphics pipeline
-		VkPipeline pipeline;						// Particle rendering pipeline
+		VkDescriptorSetLayout descriptorSetLayout;	// shader binding layout
+		VkDescriptorSet descriptorSet;				// shader bindings
+		VkPipelineLayout pipelineLayout;			// Layout of  pipeline
+		VkPipeline pipeline;						// rendering pipeline
 		void Destroy(VkDevice device)
 		{
 			vkDestroyPipeline(device, pipeline, nullptr);
@@ -68,10 +82,6 @@ public:
 		VkCommandPool commandPool;					// Use a separate command pool (queue family may differ from the one used for graphics)
 		VkCommandBuffer commandBuffer;				// Command buffer storing the dispatch commands and barriers
 		VkFence fence;								// Synchronization fence to avoid rewriting compute CB if still in use
-		VkDescriptorSetLayout descriptorSetLayout;	// Compute shader binding layout
-		VkDescriptorSet descriptorSet;				// Compute shader bindings
-		VkPipelineLayout pipelineLayout;			// Layout of the compute pipeline
-		VkPipeline pipeline;						// Compute pipeline for updating particle positions
 		struct computeUBO {							// Compute shader uniform block object
 			float deltaT;							//		Frame delta time
 			float destX;							//		x position of the attractor
@@ -95,18 +105,12 @@ public:
 
 	~VulkanExample()
 	{
-		// Graphics
+		SComputeUpdate.Destroy(device);
 		SGraphicComposition.Destroy(device);
-		/*vkDestroyPipeline(device, SGraphicComposition.pipeline, nullptr);
-		vkDestroyPipelineLayout(device, SGraphicComposition.pipelineLayout, nullptr);
-		vkDestroyDescriptorSetLayout(device, SGraphicComposition.descriptorSetLayout, nullptr);*/
 
 		// Compute
 		compute.storageBuffer.destroy();
 		compute.uniformBuffer.destroy();
-		vkDestroyPipelineLayout(device, compute.pipelineLayout, nullptr);
-		vkDestroyDescriptorSetLayout(device, compute.descriptorSetLayout, nullptr);
-		vkDestroyPipeline(device, compute.pipeline, nullptr);
 		vkDestroyFence(device, compute.fence, nullptr);
 		vkDestroyCommandPool(device, compute.commandPool, nullptr);
 
@@ -119,12 +123,45 @@ public:
 		textures.particle.loadFromFile(getAssetPath() + "textures/particle01_rgba.ktx", VK_FORMAT_R8G8B8A8_UNORM, vulkanDevice, queue);
 		textures.gradient.loadFromFile(getAssetPath() + "textures/particle_gradient_rgba.ktx", VK_FORMAT_R8G8B8A8_UNORM, vulkanDevice, queue);
 	}
+	
+	void BuildComputeUpdate()
+	{
+		std::vector<VkDescriptorSetLayoutBinding> setLayoutBindings = {
+			//Binding 0 :  Particle position storage buffer
+			vks::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_SHADER_STAGE_COMPUTE_BIT, 0),
+			//Binding 1 : Uniform buffer
+			vks::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_COMPUTE_BIT, 1),
+		};
+		VkDescriptorSetLayoutCreateInfo descriptorLayout = vks::initializers::descriptorSetLayoutCreateInfo(setLayoutBindings);
+		VK_CHECK_RESULT(vkCreateDescriptorSetLayout(device, &descriptorLayout, nullptr, &SComputeUpdate.descriptorSetLayout));
 
+		VkPipelineLayoutCreateInfo pipelineLayoutCreateInfo = vks::initializers::pipelineLayoutCreateInfo(&SComputeUpdate.descriptorSetLayout, 1);
+		VK_CHECK_RESULT(vkCreatePipelineLayout(device, &pipelineLayoutCreateInfo, nullptr, &SComputeUpdate.pipelineLayout));
+
+		VkDescriptorSetAllocateInfo allocInfo = vks::initializers::descriptorSetAllocateInfo(descriptorPool, &SComputeUpdate.descriptorSetLayout, 1);
+		VK_CHECK_RESULT(vkAllocateDescriptorSets(device, &allocInfo, &SComputeUpdate.descriptorSet));
+
+		std::vector<VkWriteDescriptorSet> writeDescriptorSets = {
+			// Binding 0 : Particle position storage buffer
+			vks::initializers::writeDescriptorSet(SComputeUpdate.descriptorSet, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 0, &compute.storageBuffer.descriptor),
+			// Binding 1 : Uniform buffer
+			vks::initializers::writeDescriptorSet(SComputeUpdate.descriptorSet, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, &compute.uniformBuffer.descriptor),
+		};
+		vkUpdateDescriptorSets(device, static_cast<uint32_t>(writeDescriptorSets.size()), writeDescriptorSets.data(), 0, NULL);
+
+		// Create pipeline
+		VkComputePipelineCreateInfo pipelineCreateInfo = vks::initializers::computePipelineCreateInfo(SComputeUpdate.pipelineLayout, 0);
+		pipelineCreateInfo.stage = loadShader(getAssetPath() + "shaders/computeparticles/particle.comp.spv", VK_SHADER_STAGE_COMPUTE_BIT);
+		VK_CHECK_RESULT(vkCreateComputePipelines(device, pipelineCache, 1, &pipelineCreateInfo, nullptr, &SComputeUpdate.pipeline));
+	}
+	
 	void BuildGraphicComposition()
 	{		
 		std::vector<VkDescriptorSetLayoutBinding> setLayoutBindings = {
-			vks::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT, 0),//Binding 0 : Particle color map
-			vks::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT, 1),// Binding 1 : Particle gradient ramp
+			//Binding 0 : Particle color map
+			vks::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT, 0),
+			//Binding 1 : Particle gradient ramp
+			vks::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT, 1),
 		};
 		VkDescriptorSetLayoutCreateInfo descriptorLayout = vks::initializers::descriptorSetLayoutCreateInfo(setLayoutBindings);
 		VK_CHECK_RESULT(vkCreateDescriptorSetLayout(device, &descriptorLayout, nullptr, &SGraphicComposition.descriptorSetLayout));
@@ -271,8 +308,8 @@ public:
 			1, &bufferBarrier,
 			0, nullptr);
 
-		vkCmdBindPipeline(compute.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, compute.pipeline);
-		vkCmdBindDescriptorSets(compute.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, compute.pipelineLayout, 0, 1, &compute.descriptorSet, 0, 0);
+		vkCmdBindPipeline(compute.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, SComputeUpdate.pipeline);
+		vkCmdBindDescriptorSets(compute.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, SComputeUpdate.pipelineLayout, 0, 1, &SComputeUpdate.descriptorSet, 0, 0);
 
 		// Dispatch the compute job
 		vkCmdDispatch(compute.commandBuffer, PARTICLE_COUNT / 256, 1, 1);
@@ -404,66 +441,6 @@ public:
 		// requiring proper synchronization (see the memory barriers in buildComputeCommandBuffer)
 		vkGetDeviceQueue(device, vulkanDevice->queueFamilyIndices.compute, 0, &compute.queue);
 
-		// Create compute pipeline
-		// Compute pipelines are created separate from graphics pipelines even if they use the same queue (family index)
-
-		std::vector<VkDescriptorSetLayoutBinding> setLayoutBindings = {
-			// Binding 0 : Particle position storage buffer
-			vks::initializers::descriptorSetLayoutBinding(
-				VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-				VK_SHADER_STAGE_COMPUTE_BIT,
-				0),
-			// Binding 1 : Uniform buffer
-			vks::initializers::descriptorSetLayoutBinding(
-				VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-				VK_SHADER_STAGE_COMPUTE_BIT,
-				1),
-		};
-
-		VkDescriptorSetLayoutCreateInfo descriptorLayout =
-			vks::initializers::descriptorSetLayoutCreateInfo(
-				setLayoutBindings.data(),
-				static_cast<uint32_t>(setLayoutBindings.size()));
-
-		VK_CHECK_RESULT(vkCreateDescriptorSetLayout(device, &descriptorLayout, nullptr, &compute.descriptorSetLayout));
-
-		VkPipelineLayoutCreateInfo pPipelineLayoutCreateInfo =
-			vks::initializers::pipelineLayoutCreateInfo(
-				&compute.descriptorSetLayout,
-				1);
-
-		VK_CHECK_RESULT(vkCreatePipelineLayout(device, &pPipelineLayoutCreateInfo, nullptr, &compute.pipelineLayout));
-
-		VkDescriptorSetAllocateInfo allocInfo =
-			vks::initializers::descriptorSetAllocateInfo(
-				descriptorPool,
-				&compute.descriptorSetLayout,
-				1);
-
-		VK_CHECK_RESULT(vkAllocateDescriptorSets(device, &allocInfo, &compute.descriptorSet));
-
-		std::vector<VkWriteDescriptorSet> computeWriteDescriptorSets =
-		{
-			// Binding 0 : Particle position storage buffer
-			vks::initializers::writeDescriptorSet(
-				compute.descriptorSet,
-				VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-				0,
-				&compute.storageBuffer.descriptor),
-			// Binding 1 : Uniform buffer
-			vks::initializers::writeDescriptorSet(
-				compute.descriptorSet,
-				VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-				1,
-				&compute.uniformBuffer.descriptor)
-		};
-
-		vkUpdateDescriptorSets(device, static_cast<uint32_t>(computeWriteDescriptorSets.size()), computeWriteDescriptorSets.data(), 0, NULL);
-
-		// Create pipeline		
-		VkComputePipelineCreateInfo computePipelineCreateInfo = vks::initializers::computePipelineCreateInfo(compute.pipelineLayout, 0);
-		computePipelineCreateInfo.stage = loadShader(getAssetPath() + "shaders/computeparticles/particle.comp.spv", VK_SHADER_STAGE_COMPUTE_BIT);
-		VK_CHECK_RESULT(vkCreateComputePipelines(device, pipelineCache, 1, &computePipelineCreateInfo, nullptr, &compute.pipeline));
 
 		// Separate command pool as queue family for compute may be different than graphics
 		VkCommandPoolCreateInfo cmdPoolInfo = {};
@@ -473,12 +450,7 @@ public:
 		VK_CHECK_RESULT(vkCreateCommandPool(device, &cmdPoolInfo, nullptr, &compute.commandPool));
 
 		// Create a command buffer for compute operations
-		VkCommandBufferAllocateInfo cmdBufAllocateInfo =
-			vks::initializers::commandBufferAllocateInfo(
-				compute.commandPool,
-				VK_COMMAND_BUFFER_LEVEL_PRIMARY,
-				1);
-
+		VkCommandBufferAllocateInfo cmdBufAllocateInfo =vks::initializers::commandBufferAllocateInfo(compute.commandPool,VK_COMMAND_BUFFER_LEVEL_PRIMARY,1);
 		VK_CHECK_RESULT(vkAllocateCommandBuffers(device, &cmdBufAllocateInfo, &compute.commandBuffer));
 
 		// Fence for compute CB sync
@@ -555,12 +527,10 @@ public:
 		prepareUniformBuffers();
 		
 		setupDescriptorPool();
+		BuildComputeUpdate();
 		BuildGraphicComposition();
 
 		prepareCompute();
-		
-		
-	
 		buildCommandBuffers();
 		prepared = true;
 	}
