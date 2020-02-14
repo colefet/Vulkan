@@ -1,5 +1,5 @@
 /*
-* Vulkan Example - Attraction based compute shader particle system
+* Vulkan Example - Particle system
 */
 
 #include <stdio.h>
@@ -89,7 +89,7 @@ public:
 
 	VulkanExample() : VulkanExampleBase(ENABLE_VALIDATION)
 	{
-		title = "Compute shader particle system";
+		title = "Particle system";
 		settings.overlay = true;
 	}
 
@@ -135,7 +135,6 @@ public:
 		VkDescriptorSetAllocateInfo allocInfo =vks::initializers::descriptorSetAllocateInfo(descriptorPool,&SGraphicComposition.descriptorSetLayout,1);
 		VK_CHECK_RESULT(vkAllocateDescriptorSets(device, &allocInfo, &SGraphicComposition.descriptorSet));
 
-
 		std::vector<VkWriteDescriptorSet> writeDescriptorSets = {
 			// Binding 0 : Particle color map
 			vks::initializers::writeDescriptorSet(SGraphicComposition.descriptorSet, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 0, &textures.particle.descriptor),
@@ -144,11 +143,47 @@ public:
 		};
 		vkUpdateDescriptorSets(device, static_cast<uint32_t>(writeDescriptorSets.size()), writeDescriptorSets.data(), 0, NULL);
 
+		// Create Rendering pipeline
+		{
+			VkPipelineInputAssemblyStateCreateInfo inputAssemblyState = vks::initializers::pipelineInputAssemblyStateCreateInfo(VK_PRIMITIVE_TOPOLOGY_POINT_LIST, 0, VK_FALSE);
+			VkPipelineRasterizationStateCreateInfo rasterizationState = vks::initializers::pipelineRasterizationStateCreateInfo(VK_POLYGON_MODE_FILL, VK_CULL_MODE_NONE, VK_FRONT_FACE_COUNTER_CLOCKWISE, 0);
+			VkPipelineColorBlendAttachmentState blendAttachmentState = vks::initializers::pipelineColorBlendAttachmentState(0xf, VK_FALSE);
+			VkPipelineColorBlendStateCreateInfo colorBlendState = vks::initializers::pipelineColorBlendStateCreateInfo(1, &blendAttachmentState);
+			VkPipelineDepthStencilStateCreateInfo depthStencilState = vks::initializers::pipelineDepthStencilStateCreateInfo(VK_FALSE, VK_FALSE, VK_COMPARE_OP_ALWAYS);
+			VkPipelineViewportStateCreateInfo viewportState = vks::initializers::pipelineViewportStateCreateInfo(1, 1, 0);
+			VkPipelineMultisampleStateCreateInfo multisampleState = vks::initializers::pipelineMultisampleStateCreateInfo(VK_SAMPLE_COUNT_1_BIT, 0);
+			std::vector<VkDynamicState> dynamicStateEnables = { VK_DYNAMIC_STATE_VIEWPORT,VK_DYNAMIC_STATE_SCISSOR };
+			VkPipelineDynamicStateCreateInfo dynamicState = vks::initializers::pipelineDynamicStateCreateInfo(dynamicStateEnables);
 
-		// Create compute shader pipelines
-		/*VkComputePipelineCreateInfo computePipelineCreateInfo = vks::initializers::computePipelineCreateInfo(Compute_SSAO.pipelineLayout, 0);
-		computePipelineCreateInfo.stage = loadShader(getAssetPath() + "shaders/asynccompute/ssao.comp.spv", VK_SHADER_STAGE_COMPUTE_BIT);
-		VK_CHECK_RESULT(vkCreateComputePipelines(device, pipelineCache, 1, &computePipelineCreateInfo, nullptr, &Compute_SSAO.pipeline));*/
+			// Load shaders
+			std::array<VkPipelineShaderStageCreateInfo, 2> shaderStages;
+			shaderStages[0] = loadShader(getAssetPath() + "shaders/computeparticles/particle.vert.spv", VK_SHADER_STAGE_VERTEX_BIT);
+			shaderStages[1] = loadShader(getAssetPath() + "shaders/computeparticles/particle.frag.spv", VK_SHADER_STAGE_FRAGMENT_BIT);
+
+			// Additive blending
+			blendAttachmentState.colorWriteMask = 0xF;
+			blendAttachmentState.blendEnable = VK_TRUE;
+			blendAttachmentState.colorBlendOp = VK_BLEND_OP_ADD;
+			blendAttachmentState.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
+			blendAttachmentState.dstColorBlendFactor = VK_BLEND_FACTOR_ONE;
+			blendAttachmentState.alphaBlendOp = VK_BLEND_OP_ADD;
+			blendAttachmentState.srcAlphaBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+			blendAttachmentState.dstAlphaBlendFactor = VK_BLEND_FACTOR_DST_ALPHA;
+
+			VkGraphicsPipelineCreateInfo pipelineCreateInfo = vks::initializers::pipelineCreateInfo(SGraphicComposition.pipelineLayout, renderPass, 0);
+			pipelineCreateInfo.pVertexInputState = &vertices.inputState;
+			pipelineCreateInfo.pInputAssemblyState = &inputAssemblyState;
+			pipelineCreateInfo.pRasterizationState = &rasterizationState;
+			pipelineCreateInfo.pColorBlendState = &colorBlendState;
+			pipelineCreateInfo.pMultisampleState = &multisampleState;
+			pipelineCreateInfo.pViewportState = &viewportState;
+			pipelineCreateInfo.pDepthStencilState = &depthStencilState;
+			pipelineCreateInfo.pDynamicState = &dynamicState;
+			pipelineCreateInfo.stageCount = static_cast<uint32_t>(shaderStages.size());
+			pipelineCreateInfo.pStages = shaderStages.data();
+			pipelineCreateInfo.renderPass = renderPass;
+			VK_CHECK_RESULT(vkCreateGraphicsPipelines(device, pipelineCache, 1, &pipelineCreateInfo, nullptr, &SGraphicComposition.pipeline));
+		}
 	}
 	
 	void buildCommandBuffers()
@@ -361,150 +396,6 @@ public:
 		VK_CHECK_RESULT(vkCreateDescriptorPool(device, &descriptorPoolInfo, nullptr, &descriptorPool));
 	}
 
-	void setupDescriptorSetLayout()
-	{
-		std::vector<VkDescriptorSetLayoutBinding> setLayoutBindings;
-		// Binding 0 : Particle color map
-		setLayoutBindings.push_back(vks::initializers::descriptorSetLayoutBinding(
-			VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-			VK_SHADER_STAGE_FRAGMENT_BIT,
-			0));
-		// Binding 1 : Particle gradient ramp
-		setLayoutBindings.push_back(vks::initializers::descriptorSetLayoutBinding(
-			VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-			VK_SHADER_STAGE_FRAGMENT_BIT,
-			1));
-
-		VkDescriptorSetLayoutCreateInfo descriptorLayout =
-			vks::initializers::descriptorSetLayoutCreateInfo(
-				setLayoutBindings.data(),
-				static_cast<uint32_t>(setLayoutBindings.size()));
-
-		VK_CHECK_RESULT(vkCreateDescriptorSetLayout(device, &descriptorLayout, nullptr, &SGraphicComposition.descriptorSetLayout));
-
-		VkPipelineLayoutCreateInfo pipelineLayoutCreateInfo =
-			vks::initializers::pipelineLayoutCreateInfo(
-				&SGraphicComposition.descriptorSetLayout,
-				1);
-
-		VK_CHECK_RESULT(vkCreatePipelineLayout(device, &pipelineLayoutCreateInfo, nullptr, &SGraphicComposition.pipelineLayout));
-	}
-
-	void setupDescriptorSet()
-	{
-		VkDescriptorSetAllocateInfo allocInfo =
-			vks::initializers::descriptorSetAllocateInfo(
-				descriptorPool,
-				&SGraphicComposition.descriptorSetLayout,
-				1);
-
-		VK_CHECK_RESULT(vkAllocateDescriptorSets(device, &allocInfo, &SGraphicComposition.descriptorSet));
-
-		std::vector<VkWriteDescriptorSet> writeDescriptorSets;
-		// Binding 0 : Particle color map
-		writeDescriptorSets.push_back(vks::initializers::writeDescriptorSet(
-			SGraphicComposition.descriptorSet,
-			VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-			0,
-			&textures.particle.descriptor));
-		// Binding 1 : Particle gradient ramp
-		writeDescriptorSets.push_back(vks::initializers::writeDescriptorSet(
-			SGraphicComposition.descriptorSet,
-			VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-			1,
-			&textures.gradient.descriptor));
-
-		vkUpdateDescriptorSets(device, static_cast<uint32_t>(writeDescriptorSets.size()), writeDescriptorSets.data(), 0, NULL);
-	}
-	
-
-	void preparePipelines()
-	{
-		VkPipelineInputAssemblyStateCreateInfo inputAssemblyState =
-			vks::initializers::pipelineInputAssemblyStateCreateInfo(
-				VK_PRIMITIVE_TOPOLOGY_POINT_LIST,
-				0,
-				VK_FALSE);
-
-		VkPipelineRasterizationStateCreateInfo rasterizationState =
-			vks::initializers::pipelineRasterizationStateCreateInfo(
-				VK_POLYGON_MODE_FILL,
-				VK_CULL_MODE_NONE,
-				VK_FRONT_FACE_COUNTER_CLOCKWISE,
-				0);
-
-		VkPipelineColorBlendAttachmentState blendAttachmentState =
-			vks::initializers::pipelineColorBlendAttachmentState(
-				0xf,
-				VK_FALSE);
-
-		VkPipelineColorBlendStateCreateInfo colorBlendState =
-			vks::initializers::pipelineColorBlendStateCreateInfo(
-				1,
-				&blendAttachmentState);
-
-		VkPipelineDepthStencilStateCreateInfo depthStencilState =
-			vks::initializers::pipelineDepthStencilStateCreateInfo(
-				VK_FALSE,
-				VK_FALSE,
-				VK_COMPARE_OP_ALWAYS);
-
-		VkPipelineViewportStateCreateInfo viewportState =
-			vks::initializers::pipelineViewportStateCreateInfo(1, 1, 0);
-
-		VkPipelineMultisampleStateCreateInfo multisampleState =
-			vks::initializers::pipelineMultisampleStateCreateInfo(
-				VK_SAMPLE_COUNT_1_BIT,
-				0);
-
-		std::vector<VkDynamicState> dynamicStateEnables = {
-			VK_DYNAMIC_STATE_VIEWPORT,
-			VK_DYNAMIC_STATE_SCISSOR
-		};
-		VkPipelineDynamicStateCreateInfo dynamicState =
-			vks::initializers::pipelineDynamicStateCreateInfo(
-				dynamicStateEnables.data(),
-				static_cast<uint32_t>(dynamicStateEnables.size()),
-				0);
-
-		// Rendering pipeline
-		// Load shaders
-		std::array<VkPipelineShaderStageCreateInfo, 2> shaderStages;
-
-		shaderStages[0] = loadShader(getAssetPath() + "shaders/computeparticles/particle.vert.spv", VK_SHADER_STAGE_VERTEX_BIT);
-		shaderStages[1] = loadShader(getAssetPath() + "shaders/computeparticles/particle.frag.spv", VK_SHADER_STAGE_FRAGMENT_BIT);
-
-		VkGraphicsPipelineCreateInfo pipelineCreateInfo =
-			vks::initializers::pipelineCreateInfo(
-				SGraphicComposition.pipelineLayout,
-				renderPass,
-				0);
-
-		pipelineCreateInfo.pVertexInputState = &vertices.inputState;
-		pipelineCreateInfo.pInputAssemblyState = &inputAssemblyState;
-		pipelineCreateInfo.pRasterizationState = &rasterizationState;
-		pipelineCreateInfo.pColorBlendState = &colorBlendState;
-		pipelineCreateInfo.pMultisampleState = &multisampleState;
-		pipelineCreateInfo.pViewportState = &viewportState;
-		pipelineCreateInfo.pDepthStencilState = &depthStencilState;
-		pipelineCreateInfo.pDynamicState = &dynamicState;
-		pipelineCreateInfo.stageCount = static_cast<uint32_t>(shaderStages.size());
-		pipelineCreateInfo.pStages = shaderStages.data();
-		pipelineCreateInfo.renderPass = renderPass;
-
-		// Additive blending
-		blendAttachmentState.colorWriteMask = 0xF;
-		blendAttachmentState.blendEnable = VK_TRUE;
-		blendAttachmentState.colorBlendOp = VK_BLEND_OP_ADD;
-		blendAttachmentState.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
-		blendAttachmentState.dstColorBlendFactor = VK_BLEND_FACTOR_ONE;
-		blendAttachmentState.alphaBlendOp = VK_BLEND_OP_ADD;
-		blendAttachmentState.srcAlphaBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
-		blendAttachmentState.dstAlphaBlendFactor = VK_BLEND_FACTOR_DST_ALPHA;
-
-		VK_CHECK_RESULT(vkCreateGraphicsPipelines(device, pipelineCache, 1, &pipelineCreateInfo, nullptr, &SGraphicComposition.pipeline));
-	}
-
 	void prepareCompute()
 	{
 		// Create a compute capable device queue
@@ -659,14 +550,17 @@ public:
 	{
 		VulkanExampleBase::prepare();
 		loadAssets();
+
 		prepareStorageBuffers();
 		prepareUniformBuffers();
+		
 		setupDescriptorPool();
 		BuildGraphicComposition();
-		//setupDescriptorSetLayout();
-		preparePipelines();
-		//setupDescriptorSet();
+
 		prepareCompute();
+		
+		
+	
 		buildCommandBuffers();
 		prepared = true;
 	}
