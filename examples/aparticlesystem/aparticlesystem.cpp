@@ -28,12 +28,24 @@
 #define PARTICLE_COUNT 256 * 1024
 #endif
 
+class CParticleSystem
+{
+public:
+	CParticleSystem() {};
+	~CParticleSystem(){};
+private:
+	uint32_t m_count = 0;
+	uint32_t m_interval = 0;
+	
+};
+
 class VulkanExample : public VulkanExampleBase
 {
 public:
 	float timer = 0.0f;
 	float animStart = 20.0f;
-	bool animate = true;
+	
+	bool m_animate = true;
 
 	struct {
 		vks::Texture2D particle;
@@ -46,8 +58,9 @@ public:
 		std::vector<VkVertexInputAttributeDescription> attributeDescriptions;
 	} vertices;
 
+	uint32_t m_discriptor_count = 2;
 	// Resources for the compute particle updating
-	struct {
+	struct SComputeUpdate {
 		VkDescriptorSetLayout descriptorSetLayout;	// shader binding layout
 		VkDescriptorSet descriptorSet;				// shader bindings
 		VkPipelineLayout pipelineLayout;			// Layout of pipeline
@@ -58,10 +71,10 @@ public:
 			vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
 			vkDestroyDescriptorSetLayout(device, descriptorSetLayout, nullptr);
 		}
-	} SComputeUpdate;
+	} m_update_bounding;
 	
 	// Resources for the graphics part of the example
-	struct {
+	struct SGraphicComposition {
 		VkDescriptorSetLayout descriptorSetLayout;	// shader binding layout
 		VkDescriptorSet descriptorSet;				// shader bindings
 		VkPipelineLayout pipelineLayout;			// Layout of  pipeline
@@ -72,22 +85,23 @@ public:
 			vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
 			vkDestroyDescriptorSetLayout(device, descriptorSetLayout, nullptr);
 		}
-	} SGraphicComposition;
+	} m_composition_bounding;
 
 	// Resources for the compute part of the example
 	struct {
-		vks::Buffer storageBuffer;					// (Shader) storage buffer object containing the particles
-		vks::Buffer uniformBuffer;					// Uniform buffer object containing particle system parameters
-		VkQueue queue;								// Separate queue for compute commands (queue family may differ from the one used for graphics)
-		VkCommandPool commandPool;					// Use a separate command pool (queue family may differ from the one used for graphics)
-		VkCommandBuffer commandBuffer;				// Command buffer storing the dispatch commands and barriers
-		VkFence fence;								// Synchronization fence to avoid rewriting compute CB if still in use
 		struct computeUBO {							// Compute shader uniform block object
 			float deltaT;							//		Frame delta time
 			float destX;							//		x position of the attractor
 			float destY;							//		y position of the attractor
 			int32_t particleCount = PARTICLE_COUNT;
 		} ubo;
+		vks::Buffer uniformBuffer;					// Uniform buffer object containing particle system parameters
+		vks::Buffer storageBuffer;					// (Shader) storage buffer object containing the particles
+		VkQueue queue;								// Separate queue for compute commands (queue family may differ from the one used for graphics)
+		VkCommandPool commandPool;					// Use a separate command pool (queue family may differ from the one used for graphics)
+		VkCommandBuffer commandBuffer;				// Command buffer storing the dispatch commands and barriers
+		VkFence fence;								// Synchronization fence to avoid rewriting compute CB if still in use
+		
 	} compute;
 
 	// SSBO particle declaration
@@ -105,8 +119,8 @@ public:
 
 	~VulkanExample()
 	{
-		SComputeUpdate.Destroy(device);
-		SGraphicComposition.Destroy(device);
+		m_update_bounding.Destroy(device);
+		m_composition_bounding.Destroy(device);
 
 		// Compute
 		compute.storageBuffer.destroy();
@@ -133,26 +147,26 @@ public:
 			vks::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_COMPUTE_BIT, 1),
 		};
 		VkDescriptorSetLayoutCreateInfo descriptorLayout = vks::initializers::descriptorSetLayoutCreateInfo(setLayoutBindings);
-		VK_CHECK_RESULT(vkCreateDescriptorSetLayout(device, &descriptorLayout, nullptr, &SComputeUpdate.descriptorSetLayout));
+		VK_CHECK_RESULT(vkCreateDescriptorSetLayout(device, &descriptorLayout, nullptr, &m_update_bounding.descriptorSetLayout));
 
-		VkPipelineLayoutCreateInfo pipelineLayoutCreateInfo = vks::initializers::pipelineLayoutCreateInfo(&SComputeUpdate.descriptorSetLayout, 1);
-		VK_CHECK_RESULT(vkCreatePipelineLayout(device, &pipelineLayoutCreateInfo, nullptr, &SComputeUpdate.pipelineLayout));
+		VkPipelineLayoutCreateInfo pipelineLayoutCreateInfo = vks::initializers::pipelineLayoutCreateInfo(&m_update_bounding.descriptorSetLayout, 1);
+		VK_CHECK_RESULT(vkCreatePipelineLayout(device, &pipelineLayoutCreateInfo, nullptr, &m_update_bounding.pipelineLayout));
 
-		VkDescriptorSetAllocateInfo allocInfo = vks::initializers::descriptorSetAllocateInfo(descriptorPool, &SComputeUpdate.descriptorSetLayout, 1);
-		VK_CHECK_RESULT(vkAllocateDescriptorSets(device, &allocInfo, &SComputeUpdate.descriptorSet));
+		VkDescriptorSetAllocateInfo allocInfo = vks::initializers::descriptorSetAllocateInfo(descriptorPool, &m_update_bounding.descriptorSetLayout, 1);
+		VK_CHECK_RESULT(vkAllocateDescriptorSets(device, &allocInfo, &m_update_bounding.descriptorSet));
 
 		std::vector<VkWriteDescriptorSet> writeDescriptorSets = {
 			// Binding 0 : Particle position storage buffer
-			vks::initializers::writeDescriptorSet(SComputeUpdate.descriptorSet, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 0, &compute.storageBuffer.descriptor),
+			vks::initializers::writeDescriptorSet(m_update_bounding.descriptorSet, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 0, &compute.storageBuffer.descriptor),
 			// Binding 1 : Uniform buffer
-			vks::initializers::writeDescriptorSet(SComputeUpdate.descriptorSet, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, &compute.uniformBuffer.descriptor),
+			vks::initializers::writeDescriptorSet(m_update_bounding.descriptorSet, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, &compute.uniformBuffer.descriptor),
 		};
 		vkUpdateDescriptorSets(device, static_cast<uint32_t>(writeDescriptorSets.size()), writeDescriptorSets.data(), 0, NULL);
 
 		// Create pipeline
-		VkComputePipelineCreateInfo pipelineCreateInfo = vks::initializers::computePipelineCreateInfo(SComputeUpdate.pipelineLayout, 0);
+		VkComputePipelineCreateInfo pipelineCreateInfo = vks::initializers::computePipelineCreateInfo(m_update_bounding.pipelineLayout, 0);
 		pipelineCreateInfo.stage = loadShader(getAssetPath() + "shaders/computeparticles/particle.comp.spv", VK_SHADER_STAGE_COMPUTE_BIT);
-		VK_CHECK_RESULT(vkCreateComputePipelines(device, pipelineCache, 1, &pipelineCreateInfo, nullptr, &SComputeUpdate.pipeline));
+		VK_CHECK_RESULT(vkCreateComputePipelines(device, pipelineCache, 1, &pipelineCreateInfo, nullptr, &m_update_bounding.pipeline));
 	}
 	
 	void BuildGraphicComposition()
@@ -164,19 +178,19 @@ public:
 			vks::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT, 1),
 		};
 		VkDescriptorSetLayoutCreateInfo descriptorLayout = vks::initializers::descriptorSetLayoutCreateInfo(setLayoutBindings);
-		VK_CHECK_RESULT(vkCreateDescriptorSetLayout(device, &descriptorLayout, nullptr, &SGraphicComposition.descriptorSetLayout));
+		VK_CHECK_RESULT(vkCreateDescriptorSetLayout(device, &descriptorLayout, nullptr, &m_composition_bounding.descriptorSetLayout));
 
-		VkPipelineLayoutCreateInfo pipelineLayoutCreateInfo =vks::initializers::pipelineLayoutCreateInfo(&SGraphicComposition.descriptorSetLayout,1);
-		VK_CHECK_RESULT(vkCreatePipelineLayout(device, &pipelineLayoutCreateInfo, nullptr, &SGraphicComposition.pipelineLayout));
+		VkPipelineLayoutCreateInfo pipelineLayoutCreateInfo =vks::initializers::pipelineLayoutCreateInfo(&m_composition_bounding.descriptorSetLayout,1);
+		VK_CHECK_RESULT(vkCreatePipelineLayout(device, &pipelineLayoutCreateInfo, nullptr, &m_composition_bounding.pipelineLayout));
 
-		VkDescriptorSetAllocateInfo allocInfo =vks::initializers::descriptorSetAllocateInfo(descriptorPool,&SGraphicComposition.descriptorSetLayout,1);
-		VK_CHECK_RESULT(vkAllocateDescriptorSets(device, &allocInfo, &SGraphicComposition.descriptorSet));
+		VkDescriptorSetAllocateInfo allocInfo =vks::initializers::descriptorSetAllocateInfo(descriptorPool,&m_composition_bounding.descriptorSetLayout,1);
+		VK_CHECK_RESULT(vkAllocateDescriptorSets(device, &allocInfo, &m_composition_bounding.descriptorSet));
 
 		std::vector<VkWriteDescriptorSet> writeDescriptorSets = {
 			// Binding 0 : Particle color map
-			vks::initializers::writeDescriptorSet(SGraphicComposition.descriptorSet, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 0, &textures.particle.descriptor),
+			vks::initializers::writeDescriptorSet(m_composition_bounding.descriptorSet, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 0, &textures.particle.descriptor),
 			// Binding 1 : Particle gradient ramp
-			vks::initializers::writeDescriptorSet(SGraphicComposition.descriptorSet, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, &textures.gradient.descriptor),
+			vks::initializers::writeDescriptorSet(m_composition_bounding.descriptorSet, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, &textures.gradient.descriptor),
 		};
 		vkUpdateDescriptorSets(device, static_cast<uint32_t>(writeDescriptorSets.size()), writeDescriptorSets.data(), 0, NULL);
 
@@ -207,7 +221,7 @@ public:
 			blendAttachmentState.srcAlphaBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
 			blendAttachmentState.dstAlphaBlendFactor = VK_BLEND_FACTOR_DST_ALPHA;
 
-			VkGraphicsPipelineCreateInfo pipelineCreateInfo = vks::initializers::pipelineCreateInfo(SGraphicComposition.pipelineLayout, renderPass, 0);
+			VkGraphicsPipelineCreateInfo pipelineCreateInfo = vks::initializers::pipelineCreateInfo(m_composition_bounding.pipelineLayout, renderPass, 0);
 			pipelineCreateInfo.pVertexInputState = &vertices.inputState;
 			pipelineCreateInfo.pInputAssemblyState = &inputAssemblyState;
 			pipelineCreateInfo.pRasterizationState = &rasterizationState;
@@ -219,7 +233,7 @@ public:
 			pipelineCreateInfo.stageCount = static_cast<uint32_t>(shaderStages.size());
 			pipelineCreateInfo.pStages = shaderStages.data();
 			pipelineCreateInfo.renderPass = renderPass;
-			VK_CHECK_RESULT(vkCreateGraphicsPipelines(device, pipelineCache, 1, &pipelineCreateInfo, nullptr, &SGraphicComposition.pipeline));
+			VK_CHECK_RESULT(vkCreateGraphicsPipelines(device, pipelineCache, 1, &pipelineCreateInfo, nullptr, &m_composition_bounding.pipeline));
 		}
 	}
 	
@@ -264,8 +278,8 @@ public:
 			VkRect2D scissor = vks::initializers::rect2D(width, height, 0, 0);
 			vkCmdSetScissor(drawCmdBuffers[i], 0, 1, &scissor);
 
-			vkCmdBindPipeline(drawCmdBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, SGraphicComposition.pipeline);
-			vkCmdBindDescriptorSets(drawCmdBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, SGraphicComposition.pipelineLayout, 0, 1, &SGraphicComposition.descriptorSet, 0, NULL);
+			vkCmdBindPipeline(drawCmdBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, m_composition_bounding.pipeline);
+			vkCmdBindDescriptorSets(drawCmdBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, m_composition_bounding.pipelineLayout, 0, 1, &m_composition_bounding.descriptorSet, 0, NULL);
 
 			VkDeviceSize offsets[1] = { 0 };
 			vkCmdBindVertexBuffers(drawCmdBuffers[i], VERTEX_BUFFER_BIND_ID, 1, &compute.storageBuffer.buffer, offsets);
@@ -298,18 +312,16 @@ public:
 		// For the barrier to work across different queues, we need to set their family indices
 		bufferBarrier.srcQueueFamilyIndex = vulkanDevice->queueFamilyIndices.graphics;			// Required as compute and graphics queue may have different families
 		bufferBarrier.dstQueueFamilyIndex = vulkanDevice->queueFamilyIndices.compute;			// Required as compute and graphics queue may have different families
-
 		vkCmdPipelineBarrier(
 			compute.commandBuffer,
-			VK_PIPELINE_STAGE_VERTEX_SHADER_BIT,
-			VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+			VK_PIPELINE_STAGE_VERTEX_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
 			VK_FLAGS_NONE,
 			0, nullptr,
 			1, &bufferBarrier,
 			0, nullptr);
 
-		vkCmdBindPipeline(compute.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, SComputeUpdate.pipeline);
-		vkCmdBindDescriptorSets(compute.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, SComputeUpdate.pipelineLayout, 0, 1, &SComputeUpdate.descriptorSet, 0, 0);
+		vkCmdBindPipeline(compute.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, m_update_bounding.pipeline);
+		vkCmdBindDescriptorSets(compute.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, m_update_bounding.pipelineLayout, 0, 1, &m_update_bounding.descriptorSet, 0, 0);
 
 		// Dispatch the compute job
 		vkCmdDispatch(compute.commandBuffer, PARTICLE_COUNT / 256, 1, 1);
@@ -324,11 +336,9 @@ public:
 		// For the barrier to work across different queues, we need to set their family indices
 		bufferBarrier.srcQueueFamilyIndex = vulkanDevice->queueFamilyIndices.compute;			// Required as compute and graphics queue may have different families
 		bufferBarrier.dstQueueFamilyIndex = vulkanDevice->queueFamilyIndices.graphics;			// Required as compute and graphics queue may have different families
-
 		vkCmdPipelineBarrier(
 			compute.commandBuffer,
-			VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-			VK_PIPELINE_STAGE_VERTEX_SHADER_BIT,
+			VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_VERTEX_SHADER_BIT,
 			VK_FLAGS_NONE,
 			0, nullptr,
 			1, &bufferBarrier,
@@ -382,30 +392,18 @@ public:
 		stagingBuffer.destroy();
 
 		// Binding description
-		vertices.bindingDescriptions.resize(1);
-		vertices.bindingDescriptions[0] =
-			vks::initializers::vertexInputBindingDescription(
-				VERTEX_BUFFER_BIND_ID,
-				sizeof(Particle),
-				VK_VERTEX_INPUT_RATE_VERTEX);
+		vertices.bindingDescriptions = {
+			vks::initializers::vertexInputBindingDescription(VERTEX_BUFFER_BIND_ID, sizeof(Particle), VK_VERTEX_INPUT_RATE_VERTEX)
+		};
 
 		// Attribute descriptions
 		// Describes memory layout and shader positions
-		vertices.attributeDescriptions.resize(2);
-		// Location 0 : Position
-		vertices.attributeDescriptions[0] =
-			vks::initializers::vertexInputAttributeDescription(
-				VERTEX_BUFFER_BIND_ID,
-				0,
-				VK_FORMAT_R32G32_SFLOAT,
-				offsetof(Particle, pos));
-		// Location 1 : Gradient position
-		vertices.attributeDescriptions[1] =
-			vks::initializers::vertexInputAttributeDescription(
-				VERTEX_BUFFER_BIND_ID,
-				1,
-				VK_FORMAT_R32G32B32A32_SFLOAT,
-				offsetof(Particle, gradientPos));
+		vertices.attributeDescriptions = {
+			// Location 0 : Position
+			vks::initializers::vertexInputAttributeDescription(VERTEX_BUFFER_BIND_ID, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(Particle, pos)),
+			// Location 1 : Gradient position
+			vks::initializers::vertexInputAttributeDescription(VERTEX_BUFFER_BIND_ID, 1, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(Particle, gradientPos))
+		};
 
 		// Assign to vertex buffer
 		vertices.inputState = vks::initializers::pipelineVertexInputStateCreateInfo();
@@ -423,13 +421,7 @@ public:
 			vks::initializers::descriptorPoolSize(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1),
 			vks::initializers::descriptorPoolSize(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2)
 		};
-
-		VkDescriptorPoolCreateInfo descriptorPoolInfo =
-			vks::initializers::descriptorPoolCreateInfo(
-				static_cast<uint32_t>(poolSizes.size()),
-				poolSizes.data(),
-				2);
-
+		VkDescriptorPoolCreateInfo descriptorPoolInfo =vks::initializers::descriptorPoolCreateInfo(static_cast<uint32_t>(poolSizes.size()),poolSizes.data(),m_discriptor_count);
 		VK_CHECK_RESULT(vkCreateDescriptorPool(device, &descriptorPoolInfo, nullptr, &descriptorPool));
 	}
 
@@ -471,16 +463,13 @@ public:
 			&compute.uniformBuffer,
 			sizeof(compute.ubo));
 
-		// Map for host access
-		VK_CHECK_RESULT(compute.uniformBuffer.map());
-
 		updateUniformBuffers();
 	}
 
 	void updateUniformBuffers()
 	{
 		compute.ubo.deltaT = frameTimer * 2.5f;
-		if (animate)
+		if (m_animate)
 		{
 			compute.ubo.destX = sin(glm::radians(timer * 360.0f)) * 0.75f;
 			compute.ubo.destY = 0.0f;
@@ -492,8 +481,11 @@ public:
 			compute.ubo.destX = normalizedMx;
 			compute.ubo.destY = normalizedMy;
 		}
-
+		
+		// Map for host access
+		VK_CHECK_RESULT(compute.uniformBuffer.map());
 		memcpy(compute.uniformBuffer.mapped, &compute.ubo, sizeof(compute.ubo));
+		compute.uniformBuffer.unmap();
 	}
 
 	void draw()
@@ -541,7 +533,7 @@ public:
 			return;
 		draw();
 
-		if (animate)
+		if (m_animate)
 		{
 			if (animStart > 0.0f)
 			{
@@ -561,7 +553,8 @@ public:
 	virtual void OnUpdateUIOverlay(vks::UIOverlay* overlay)
 	{
 		if (overlay->header("Settings")) {
-			overlay->checkBox("Moving attractor", &animate);
+			overlay->checkBox("Moving attractor", &m_animate);
+			//overlay->checkBox("Moving attractor", &animate);
 		}
 	}
 };
