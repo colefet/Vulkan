@@ -28,29 +28,61 @@
 #define PARTICLE_COUNT 256 * 1024
 #endif
 
+#if !(defined(VK_USE_PLATFORM_IOS_MVK) || defined(VK_USE_PLATFORM_MACOS_MVK))
+// iOS & macOS: VulkanExampleBase::getAssetPath() implemented externally to allow access to Objective-C components
+const std::string getAssetPath()
+{
+#if defined(VK_USE_PLATFORM_ANDROID_KHR)
+	return "";
+#elif defined(VK_EXAMPLE_DATA_DIR)
+	return VK_EXAMPLE_DATA_DIR;
+#else
+	return "./../data/";
+#endif
+}
+#endif
+
 class CParticleSystem
 {
 public:
 	CParticleSystem() {};
 	~CParticleSystem(){};
+	void Destroy(VkDevice device)
+	{
+		m_particle_tex.destroy();
+		m_gradient_tex.destroy();
+	}
+
+	void LoadAssets(vks::VulkanDevice* vulkanDevice, VkQueue queue)
+	{
+		m_particle_tex.loadFromFile(getAssetPath() + "textures/particle01_rgba.ktx", VK_FORMAT_R8G8B8A8_UNORM, vulkanDevice, queue);
+		m_gradient_tex.loadFromFile(getAssetPath() + "textures/particle_gradient_rgba.ktx", VK_FORMAT_R8G8B8A8_UNORM, vulkanDevice, queue);
+	}
+	vks::Texture2D& GetTex() { return m_particle_tex; }
+	vks::Texture2D& GetGradientTex() { return m_gradient_tex; }
+
 private:
 	uint32_t m_count = 0;
 	uint32_t m_interval = 0;
+
+	vks::Texture2D m_particle_tex;
+	vks::Texture2D m_gradient_tex;
 	
 };
 
 class VulkanExample : public VulkanExampleBase
 {
 public:
+	CParticleSystem m_particles;
 	float timer = 0.0f;
 	float animStart = 20.0f;
 	
 	bool m_animate = true;
 
-	struct {
+	/*struct {
 		vks::Texture2D particle;
 		vks::Texture2D gradient;
-	} textures;
+	} textures;*/
 
 	struct {
 		VkPipelineVertexInputStateCreateInfo inputState;
@@ -61,6 +93,20 @@ public:
 	uint32_t m_discriptor_count = 2;
 	// Resources for the compute particle updating
 	struct SComputeUpdate {
+		struct SAttractorParam {					// Compute shader uniform block object
+			float deltaT;							//		Frame delta time
+			float destX;							//		x position of the attractor
+			float destY;							//		y position of the attractor
+			int32_t particleCount = PARTICLE_COUNT;
+		} attractorParams;
+		vks::Buffer uboAttractor;				// Uniform buffer object containing particle system parameters
+		
+		struct SParticle {							// SSBO particle declaration
+			glm::vec2 pos;							// Particle position
+			glm::vec2 vel;							// Particle velocity
+			glm::vec4 gradientPos;					// Texture coordiantes for the gradient ramp map
+		};
+		vks::Buffer ssboParticles;					// (Shader) storage buffer object containing the particles
 		VkDescriptorSetLayout descriptorSetLayout;	// shader binding layout
 		VkDescriptorSet descriptorSet;				// shader bindings
 		VkPipelineLayout pipelineLayout;			// Layout of pipeline
@@ -70,11 +116,19 @@ public:
 			vkDestroyPipeline(device, pipeline, nullptr);
 			vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
 			vkDestroyDescriptorSetLayout(device, descriptorSetLayout, nullptr);
+			ssboParticles.destroy();
+			uboAttractor.destroy();
 		}
-	} m_update_bounding;
+	} m_update_binding;
 	
 	// Resources for the graphics part of the example
 	struct SGraphicComposition {
+		struct SSceneMatrices {
+			glm::mat4 model;
+			glm::mat4 view;
+			glm::mat4 projection;
+		} sceneMatrices;
+		vks::Buffer uboSceneMatrices;
 		VkDescriptorSetLayout descriptorSetLayout;	// shader binding layout
 		VkDescriptorSet descriptorSet;				// shader bindings
 		VkPipelineLayout pipelineLayout;			// Layout of  pipeline
@@ -84,19 +138,12 @@ public:
 			vkDestroyPipeline(device, pipeline, nullptr);
 			vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
 			vkDestroyDescriptorSetLayout(device, descriptorSetLayout, nullptr);
+			uboSceneMatrices.destroy();
 		}
-	} m_composition_bounding;
+	} m_composition_binding;
 
 	// Resources for the compute part of the example
 	struct {
-		struct computeUBO {							// Compute shader uniform block object
-			float deltaT;							//		Frame delta time
-			float destX;							//		x position of the attractor
-			float destY;							//		y position of the attractor
-			int32_t particleCount = PARTICLE_COUNT;
-		} ubo;
-		vks::Buffer uniformBuffer;					// Uniform buffer object containing particle system parameters
-		vks::Buffer storageBuffer;					// (Shader) storage buffer object containing the particles
 		VkQueue queue;								// Separate queue for compute commands (queue family may differ from the one used for graphics)
 		VkCommandPool commandPool;					// Use a separate command pool (queue family may differ from the one used for graphics)
 		VkCommandBuffer commandBuffer;				// Command buffer storing the dispatch commands and barriers
@@ -104,38 +151,39 @@ public:
 		
 	} compute;
 
-	// SSBO particle declaration
-	struct Particle {
-		glm::vec2 pos;								// Particle position
-		glm::vec2 vel;								// Particle velocity
-		glm::vec4 gradientPos;						// Texture coordiantes for the gradient ramp map
-	};
 
 	VulkanExample() : VulkanExampleBase(ENABLE_VALIDATION)
 	{
 		title = "Particle system";
 		settings.overlay = true;
+
+		//setting camera
+		camera.type = Camera::CameraType::firstperson;
+		camera.movementSpeed = 5.0f;
+		camera.position = { 7.5f, -6.75f, 0.0f };
+		camera.setRotation(glm::vec3(5.0f, 90.0f, 0.0f));
+		camera.setPerspective(60.0f, (float)width / (float)height, 0.1f, 64.0f);
 	}
 
 	~VulkanExample()
 	{
-		m_update_bounding.Destroy(device);
-		m_composition_bounding.Destroy(device);
+		m_update_binding.Destroy(device);
+		m_composition_binding.Destroy(device);
 
 		// Compute
-		compute.storageBuffer.destroy();
-		compute.uniformBuffer.destroy();
 		vkDestroyFence(device, compute.fence, nullptr);
 		vkDestroyCommandPool(device, compute.commandPool, nullptr);
 
-		textures.particle.destroy();
-		textures.gradient.destroy();
+		m_particles.Destroy(device);
+		//textures.particle.destroy();
+		//textures.gradient.destroy();
 	}
 
 	void loadAssets()
 	{
-		textures.particle.loadFromFile(getAssetPath() + "textures/particle01_rgba.ktx", VK_FORMAT_R8G8B8A8_UNORM, vulkanDevice, queue);
-		textures.gradient.loadFromFile(getAssetPath() + "textures/particle_gradient_rgba.ktx", VK_FORMAT_R8G8B8A8_UNORM, vulkanDevice, queue);
+		m_particles.LoadAssets(vulkanDevice, queue);
+		//textures.particle.loadFromFile(getAssetPath() + "textures/particle01_rgba.ktx", VK_FORMAT_R8G8B8A8_UNORM, vulkanDevice, queue);
+		//textures.gradient.loadFromFile(getAssetPath() + "textures/particle_gradient_rgba.ktx", VK_FORMAT_R8G8B8A8_UNORM, vulkanDevice, queue);
 	}
 	
 	void BuildComputeUpdate()
@@ -147,26 +195,26 @@ public:
 			vks::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_COMPUTE_BIT, 1),
 		};
 		VkDescriptorSetLayoutCreateInfo descriptorLayout = vks::initializers::descriptorSetLayoutCreateInfo(setLayoutBindings);
-		VK_CHECK_RESULT(vkCreateDescriptorSetLayout(device, &descriptorLayout, nullptr, &m_update_bounding.descriptorSetLayout));
+		VK_CHECK_RESULT(vkCreateDescriptorSetLayout(device, &descriptorLayout, nullptr, &m_update_binding.descriptorSetLayout));
 
-		VkPipelineLayoutCreateInfo pipelineLayoutCreateInfo = vks::initializers::pipelineLayoutCreateInfo(&m_update_bounding.descriptorSetLayout, 1);
-		VK_CHECK_RESULT(vkCreatePipelineLayout(device, &pipelineLayoutCreateInfo, nullptr, &m_update_bounding.pipelineLayout));
+		VkPipelineLayoutCreateInfo pipelineLayoutCreateInfo = vks::initializers::pipelineLayoutCreateInfo(&m_update_binding.descriptorSetLayout, 1);
+		VK_CHECK_RESULT(vkCreatePipelineLayout(device, &pipelineLayoutCreateInfo, nullptr, &m_update_binding.pipelineLayout));
 
-		VkDescriptorSetAllocateInfo allocInfo = vks::initializers::descriptorSetAllocateInfo(descriptorPool, &m_update_bounding.descriptorSetLayout, 1);
-		VK_CHECK_RESULT(vkAllocateDescriptorSets(device, &allocInfo, &m_update_bounding.descriptorSet));
+		VkDescriptorSetAllocateInfo allocInfo = vks::initializers::descriptorSetAllocateInfo(descriptorPool, &m_update_binding.descriptorSetLayout, 1);
+		VK_CHECK_RESULT(vkAllocateDescriptorSets(device, &allocInfo, &m_update_binding.descriptorSet));
 
 		std::vector<VkWriteDescriptorSet> writeDescriptorSets = {
 			// Binding 0 : Particle position storage buffer
-			vks::initializers::writeDescriptorSet(m_update_bounding.descriptorSet, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 0, &compute.storageBuffer.descriptor),
+			vks::initializers::writeDescriptorSet(m_update_binding.descriptorSet, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 0, &m_update_binding.ssboParticles.descriptor),
 			// Binding 1 : Uniform buffer
-			vks::initializers::writeDescriptorSet(m_update_bounding.descriptorSet, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, &compute.uniformBuffer.descriptor),
+			vks::initializers::writeDescriptorSet(m_update_binding.descriptorSet, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, &m_update_binding.uboAttractor.descriptor),
 		};
 		vkUpdateDescriptorSets(device, static_cast<uint32_t>(writeDescriptorSets.size()), writeDescriptorSets.data(), 0, NULL);
 
 		// Create pipeline
-		VkComputePipelineCreateInfo pipelineCreateInfo = vks::initializers::computePipelineCreateInfo(m_update_bounding.pipelineLayout, 0);
-		pipelineCreateInfo.stage = loadShader(getAssetPath() + "shaders/computeparticles/particle.comp.spv", VK_SHADER_STAGE_COMPUTE_BIT);
-		VK_CHECK_RESULT(vkCreateComputePipelines(device, pipelineCache, 1, &pipelineCreateInfo, nullptr, &m_update_bounding.pipeline));
+		VkComputePipelineCreateInfo pipelineCreateInfo = vks::initializers::computePipelineCreateInfo(m_update_binding.pipelineLayout, 0);
+		pipelineCreateInfo.stage = loadShader(getAssetPath() + "shaders/aparticlesystem/particle.comp.spv", VK_SHADER_STAGE_COMPUTE_BIT);
+		VK_CHECK_RESULT(vkCreateComputePipelines(device, pipelineCache, 1, &pipelineCreateInfo, nullptr, &m_update_binding.pipeline));
 	}
 	
 	void BuildGraphicComposition()
@@ -178,19 +226,19 @@ public:
 			vks::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT, 1),
 		};
 		VkDescriptorSetLayoutCreateInfo descriptorLayout = vks::initializers::descriptorSetLayoutCreateInfo(setLayoutBindings);
-		VK_CHECK_RESULT(vkCreateDescriptorSetLayout(device, &descriptorLayout, nullptr, &m_composition_bounding.descriptorSetLayout));
+		VK_CHECK_RESULT(vkCreateDescriptorSetLayout(device, &descriptorLayout, nullptr, &m_composition_binding.descriptorSetLayout));
 
-		VkPipelineLayoutCreateInfo pipelineLayoutCreateInfo =vks::initializers::pipelineLayoutCreateInfo(&m_composition_bounding.descriptorSetLayout,1);
-		VK_CHECK_RESULT(vkCreatePipelineLayout(device, &pipelineLayoutCreateInfo, nullptr, &m_composition_bounding.pipelineLayout));
+		VkPipelineLayoutCreateInfo pipelineLayoutCreateInfo =vks::initializers::pipelineLayoutCreateInfo(&m_composition_binding.descriptorSetLayout,1);
+		VK_CHECK_RESULT(vkCreatePipelineLayout(device, &pipelineLayoutCreateInfo, nullptr, &m_composition_binding.pipelineLayout));
 
-		VkDescriptorSetAllocateInfo allocInfo =vks::initializers::descriptorSetAllocateInfo(descriptorPool,&m_composition_bounding.descriptorSetLayout,1);
-		VK_CHECK_RESULT(vkAllocateDescriptorSets(device, &allocInfo, &m_composition_bounding.descriptorSet));
+		VkDescriptorSetAllocateInfo allocInfo =vks::initializers::descriptorSetAllocateInfo(descriptorPool,&m_composition_binding.descriptorSetLayout,1);
+		VK_CHECK_RESULT(vkAllocateDescriptorSets(device, &allocInfo, &m_composition_binding.descriptorSet));
 
 		std::vector<VkWriteDescriptorSet> writeDescriptorSets = {
 			// Binding 0 : Particle color map
-			vks::initializers::writeDescriptorSet(m_composition_bounding.descriptorSet, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 0, &textures.particle.descriptor),
+			vks::initializers::writeDescriptorSet(m_composition_binding.descriptorSet, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 0, &m_particles.GetTex().descriptor),
 			// Binding 1 : Particle gradient ramp
-			vks::initializers::writeDescriptorSet(m_composition_bounding.descriptorSet, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, &textures.gradient.descriptor),
+			vks::initializers::writeDescriptorSet(m_composition_binding.descriptorSet, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, &m_particles.GetGradientTex().descriptor),
 		};
 		vkUpdateDescriptorSets(device, static_cast<uint32_t>(writeDescriptorSets.size()), writeDescriptorSets.data(), 0, NULL);
 
@@ -208,8 +256,8 @@ public:
 
 			// Load shaders
 			std::array<VkPipelineShaderStageCreateInfo, 2> shaderStages;
-			shaderStages[0] = loadShader(getAssetPath() + "shaders/computeparticles/particle.vert.spv", VK_SHADER_STAGE_VERTEX_BIT);
-			shaderStages[1] = loadShader(getAssetPath() + "shaders/computeparticles/particle.frag.spv", VK_SHADER_STAGE_FRAGMENT_BIT);
+			shaderStages[0] = loadShader(getAssetPath() + "shaders/aparticlesystem/particle.vert.spv", VK_SHADER_STAGE_VERTEX_BIT);
+			shaderStages[1] = loadShader(getAssetPath() + "shaders/aparticlesystem/particle.frag.spv", VK_SHADER_STAGE_FRAGMENT_BIT);
 
 			// Additive blending
 			blendAttachmentState.colorWriteMask = 0xF;
@@ -221,7 +269,7 @@ public:
 			blendAttachmentState.srcAlphaBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
 			blendAttachmentState.dstAlphaBlendFactor = VK_BLEND_FACTOR_DST_ALPHA;
 
-			VkGraphicsPipelineCreateInfo pipelineCreateInfo = vks::initializers::pipelineCreateInfo(m_composition_bounding.pipelineLayout, renderPass, 0);
+			VkGraphicsPipelineCreateInfo pipelineCreateInfo = vks::initializers::pipelineCreateInfo(m_composition_binding.pipelineLayout, renderPass, 0);
 			pipelineCreateInfo.pVertexInputState = &vertices.inputState;
 			pipelineCreateInfo.pInputAssemblyState = &inputAssemblyState;
 			pipelineCreateInfo.pRasterizationState = &rasterizationState;
@@ -233,7 +281,7 @@ public:
 			pipelineCreateInfo.stageCount = static_cast<uint32_t>(shaderStages.size());
 			pipelineCreateInfo.pStages = shaderStages.data();
 			pipelineCreateInfo.renderPass = renderPass;
-			VK_CHECK_RESULT(vkCreateGraphicsPipelines(device, pipelineCache, 1, &pipelineCreateInfo, nullptr, &m_composition_bounding.pipeline));
+			VK_CHECK_RESULT(vkCreateGraphicsPipelines(device, pipelineCache, 1, &pipelineCreateInfo, nullptr, &m_composition_binding.pipeline));
 		}
 	}
 	
@@ -278,11 +326,11 @@ public:
 			VkRect2D scissor = vks::initializers::rect2D(width, height, 0, 0);
 			vkCmdSetScissor(drawCmdBuffers[i], 0, 1, &scissor);
 
-			vkCmdBindPipeline(drawCmdBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, m_composition_bounding.pipeline);
-			vkCmdBindDescriptorSets(drawCmdBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, m_composition_bounding.pipelineLayout, 0, 1, &m_composition_bounding.descriptorSet, 0, NULL);
+			vkCmdBindPipeline(drawCmdBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, m_composition_binding.pipeline);
+			vkCmdBindDescriptorSets(drawCmdBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, m_composition_binding.pipelineLayout, 0, 1, &m_composition_binding.descriptorSet, 0, NULL);
 
 			VkDeviceSize offsets[1] = { 0 };
-			vkCmdBindVertexBuffers(drawCmdBuffers[i], VERTEX_BUFFER_BIND_ID, 1, &compute.storageBuffer.buffer, offsets);
+			vkCmdBindVertexBuffers(drawCmdBuffers[i], VERTEX_BUFFER_BIND_ID, 1, &m_update_binding.ssboParticles.buffer, offsets);
 			vkCmdDraw(drawCmdBuffers[i], PARTICLE_COUNT, 1, 0, 0);
 
 			drawUI(drawCmdBuffers[i]);
@@ -291,7 +339,6 @@ public:
 
 			VK_CHECK_RESULT(vkEndCommandBuffer(drawCmdBuffers[i]));
 		}
-
 	}
 
 	void buildComputeCommandBuffer()
@@ -304,8 +351,8 @@ public:
 
 		// Add memory barrier to ensure that the (graphics) vertex shader has fetched attributes before compute starts to write to the buffer
 		VkBufferMemoryBarrier bufferBarrier = vks::initializers::bufferMemoryBarrier();
-		bufferBarrier.buffer = compute.storageBuffer.buffer;
-		bufferBarrier.size = compute.storageBuffer.descriptor.range;
+		bufferBarrier.buffer = m_update_binding.ssboParticles.buffer;
+		bufferBarrier.size = m_update_binding.ssboParticles.descriptor.range;
 		bufferBarrier.srcAccessMask = VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT;						// Vertex shader invocations have finished reading from the buffer
 		bufferBarrier.dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;								// Compute shader wants to write to the buffer
 		// Compute and graphics queue may have different queue families (see VulkanDevice::createLogicalDevice)
@@ -320,8 +367,8 @@ public:
 			1, &bufferBarrier,
 			0, nullptr);
 
-		vkCmdBindPipeline(compute.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, m_update_bounding.pipeline);
-		vkCmdBindDescriptorSets(compute.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, m_update_bounding.pipelineLayout, 0, 1, &m_update_bounding.descriptorSet, 0, 0);
+		vkCmdBindPipeline(compute.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, m_update_binding.pipeline);
+		vkCmdBindDescriptorSets(compute.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, m_update_binding.pipelineLayout, 0, 1, &m_update_binding.descriptorSet, 0, 0);
 
 		// Dispatch the compute job
 		vkCmdDispatch(compute.commandBuffer, PARTICLE_COUNT / 256, 1, 1);
@@ -330,8 +377,8 @@ public:
 		// Without this the (rendering) vertex shader may display incomplete results (partial data from last frame) 
 		bufferBarrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;								// Compute shader has finished writes to the buffer
 		bufferBarrier.dstAccessMask = VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT;						// Vertex shader invocations want to read from the buffer
-		bufferBarrier.buffer = compute.storageBuffer.buffer;
-		bufferBarrier.size = compute.storageBuffer.descriptor.range;
+		bufferBarrier.buffer = m_update_binding.ssboParticles.buffer;
+		bufferBarrier.size = m_update_binding.ssboParticles.descriptor.range;
 		// Compute and graphics queue may have different queue families (see VulkanDevice::createLogicalDevice)
 		// For the barrier to work across different queues, we need to set their family indices
 		bufferBarrier.srcQueueFamilyIndex = vulkanDevice->queueFamilyIndices.compute;			// Required as compute and graphics queue may have different families
@@ -354,14 +401,14 @@ public:
 		std::uniform_real_distribution<float> rndDist(-1.0f, 1.0f);
 
 		// Initial particle positions
-		std::vector<Particle> particleBuffer(PARTICLE_COUNT);
+		std::vector<SComputeUpdate::SParticle> particleBuffer(PARTICLE_COUNT);
 		for (auto& particle : particleBuffer) {
 			particle.pos = glm::vec2(rndDist(rndEngine), rndDist(rndEngine));
 			particle.vel = glm::vec2(0.0f);
 			particle.gradientPos.x = particle.pos.x / 2.0f;
 		}
 
-		VkDeviceSize storageBufferSize = particleBuffer.size() * sizeof(Particle);
+		VkDeviceSize storageBufferSize = particleBuffer.size() * sizeof(SComputeUpdate::SParticle);
 
 		// Staging
 		// SSBO won't be changed on the host after upload so copy to device local memory 
@@ -379,30 +426,30 @@ public:
 			// The SSBO will be used as a storage buffer for the compute pipeline and as a vertex buffer in the graphics pipeline
 			VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
 			VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-			&compute.storageBuffer,
+			&m_update_binding.ssboParticles,
 			storageBufferSize);
 
 		// Copy to staging buffer
 		VkCommandBuffer copyCmd = VulkanExampleBase::createCommandBuffer(VK_COMMAND_BUFFER_LEVEL_PRIMARY, true);
 		VkBufferCopy copyRegion = {};
 		copyRegion.size = storageBufferSize;
-		vkCmdCopyBuffer(copyCmd, stagingBuffer.buffer, compute.storageBuffer.buffer, 1, &copyRegion);
+		vkCmdCopyBuffer(copyCmd, stagingBuffer.buffer, m_update_binding.ssboParticles.buffer, 1, &copyRegion);
 		VulkanExampleBase::flushCommandBuffer(copyCmd, queue, true);
 
 		stagingBuffer.destroy();
 
 		// Binding description
 		vertices.bindingDescriptions = {
-			vks::initializers::vertexInputBindingDescription(VERTEX_BUFFER_BIND_ID, sizeof(Particle), VK_VERTEX_INPUT_RATE_VERTEX)
+			vks::initializers::vertexInputBindingDescription(VERTEX_BUFFER_BIND_ID, sizeof(SComputeUpdate::SParticle), VK_VERTEX_INPUT_RATE_VERTEX)
 		};
 
 		// Attribute descriptions
 		// Describes memory layout and shader positions
 		vertices.attributeDescriptions = {
 			// Location 0 : Position
-			vks::initializers::vertexInputAttributeDescription(VERTEX_BUFFER_BIND_ID, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(Particle, pos)),
+			vks::initializers::vertexInputAttributeDescription(VERTEX_BUFFER_BIND_ID, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(SComputeUpdate::SParticle, pos)),
 			// Location 1 : Gradient position
-			vks::initializers::vertexInputAttributeDescription(VERTEX_BUFFER_BIND_ID, 1, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(Particle, gradientPos))
+			vks::initializers::vertexInputAttributeDescription(VERTEX_BUFFER_BIND_ID, 1, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(SComputeUpdate::SParticle, gradientPos))
 		};
 
 		// Assign to vertex buffer
@@ -453,6 +500,38 @@ public:
 		buildComputeCommandBuffer();
 	}
 
+	void updateUniformBufferAttractor()
+	{
+		m_update_binding.attractorParams.deltaT = frameTimer * 2.5f;
+		if (m_animate)
+		{
+			m_update_binding.attractorParams.destX = sin(glm::radians(timer * 360.0f)) * 0.75f;
+			m_update_binding.attractorParams.destY = 0.0f;
+		}
+		else
+		{
+			float normalizedMx = (mousePos.x - static_cast<float>(width / 2)) / static_cast<float>(width / 2);
+			float normalizedMy = (mousePos.y - static_cast<float>(height / 2)) / static_cast<float>(height / 2);
+			m_update_binding.attractorParams.destX = normalizedMx;
+			m_update_binding.attractorParams.destY = normalizedMy;
+		}
+
+		// Map for host access
+		VK_CHECK_RESULT(m_update_binding.uboAttractor.map());
+		memcpy(m_update_binding.uboAttractor.mapped, &m_update_binding.attractorParams, sizeof(m_update_binding.attractorParams));
+		m_update_binding.uboAttractor.unmap();
+	}
+	void updateUniformBufferMarices()
+	{
+		m_composition_binding.sceneMatrices.projection = camera.matrices.perspective;
+		m_composition_binding.sceneMatrices.view = camera.matrices.view;
+		m_composition_binding.sceneMatrices.model = glm::mat4(1.0f);
+
+		// Map for host access
+		VK_CHECK_RESULT(m_composition_binding.uboSceneMatrices.map());
+		memcpy(m_composition_binding.uboSceneMatrices.mapped, &m_composition_binding.sceneMatrices, sizeof(m_composition_binding.sceneMatrices));
+		m_composition_binding.uboSceneMatrices.unmap();
+	}
 	// Prepare and initialize uniform buffer containing shader uniforms
 	void prepareUniformBuffers()
 	{
@@ -460,34 +539,26 @@ public:
 		vulkanDevice->createBuffer(
 			VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
 			VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-			&compute.uniformBuffer,
-			sizeof(compute.ubo));
+			&m_update_binding.uboAttractor,
+			sizeof(m_update_binding.attractorParams));
 
-		updateUniformBuffers();
+		updateUniformBufferAttractor();
+
+		// Scene matrices
+		vulkanDevice->createBuffer(
+			VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+			VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+			&m_composition_binding.uboSceneMatrices,
+			sizeof(m_composition_binding.sceneMatrices));
+
+		updateUniformBufferMarices();
 	}
-
-	void updateUniformBuffers()
+	void Update()
 	{
-		compute.ubo.deltaT = frameTimer * 2.5f;
-		if (m_animate)
-		{
-			compute.ubo.destX = sin(glm::radians(timer * 360.0f)) * 0.75f;
-			compute.ubo.destY = 0.0f;
-		}
-		else
-		{
-			float normalizedMx = (mousePos.x - static_cast<float>(width / 2)) / static_cast<float>(width / 2);
-			float normalizedMy = (mousePos.y - static_cast<float>(height / 2)) / static_cast<float>(height / 2);
-			compute.ubo.destX = normalizedMx;
-			compute.ubo.destY = normalizedMy;
-		}
-		
-		// Map for host access
-		VK_CHECK_RESULT(compute.uniformBuffer.map());
-		memcpy(compute.uniformBuffer.mapped, &compute.ubo, sizeof(compute.ubo));
-		compute.uniformBuffer.unmap();
+		updateUniformBufferAttractor();
+		updateUniformBufferMarices();
 	}
-
+	
 	void draw()
 	{
 		VkSubmitInfo computeSubmitInfo = vks::initializers::submitInfo();
@@ -546,8 +617,7 @@ public:
 					timer = 0.f;
 			}
 		}
-
-		updateUniformBuffers();
+		Update();
 	}
 
 	virtual void OnUpdateUIOverlay(vks::UIOverlay* overlay)
