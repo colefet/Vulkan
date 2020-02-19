@@ -1,9 +1,9 @@
 #version 450
 
 layout (location = 0) in vec2 vPos;
-layout (location = 1) in vec4 vGradientPos;
+layout (location = 1) in vec4 vGradientUV;
 
-layout (binding = 0) uniform UBO
+layout (binding = 2) uniform UBO
 {
 	mat4 model;
 	mat4 view;
@@ -11,7 +11,7 @@ layout (binding = 0) uniform UBO
 } SceneMatrices;
 
 layout (location = 0) out vec4 fColor;
-layout (location = 1) out float fGradientPos;
+layout (location = 1) out float fGradientUV;
 out gl_PerVertex
 {
 	vec4 gl_Position;
@@ -25,5 +25,5 @@ void main ()
   //gl_Position = SceneMatrices.projection * SceneMatrices.view * SceneMatrices.model * vPos;
 
   fColor = vec4(0.035);
-  fGradientPos = vGradientPos.x;
+  fGradientUV = vGradientUV.x;
 }

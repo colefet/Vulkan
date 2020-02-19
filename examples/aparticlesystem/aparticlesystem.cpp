@@ -42,6 +42,19 @@ const std::string getAssetPath()
 }
 #endif
 
+class CParticle
+{
+public:
+	CParticle() {};
+	~CParticle() {};
+private:
+	//std::vector<uint32_t> m_max_life;
+	uint32_t  m_life;
+	uint32_t  m_age;
+
+	glm::vec3 m_offset = { 0.0f, 0.0f, 0.0f };
+	glm::vec3 m_velocity = { 0.0f, 0.0f, 0.0f };
+};
 class CParticleSystem
 {
 public:
@@ -51,20 +64,25 @@ public:
 	{
 		
 	}
-
+	void Update()
+	{
+		
+	};
 	uint32_t GetParticleCount() { return m_particle_count; };
 	const std::string& GetTex() { return m_particle_tex; }
 	const std::string& GetGradientTex() { return m_gradient_tex; }
 
 private:
+	//Emission 
 	uint32_t m_particle_count = 100;
 	uint32_t m_interval = 0;
 	
-	std::string m_particle_tex = "textures/particle01_rgba.ktx";
-	std::string m_gradient_tex = "textures/particle_gradient_rgba.ktx";
-
+	//Motion
 	glm::vec3 m_pos = { 0.0f, 0.0f, 0.0f };
 	
+	//Appearance
+	std::string m_particle_tex = "textures/particle01_rgba.ktx";
+	std::string m_gradient_tex = "textures/particle_gradient_rgba.ktx";
 };
 
 class VulkanExample : public VulkanExampleBase
@@ -83,7 +101,7 @@ public:
 	} textures;
 
 	uint32_t m_discriptor_count = 2;
-	// Resources for the compute particle updating
+	// Resources for the compute particle simulation
 	struct SComputeUpdate {
 		struct SAttractorParam {					// Compute shader uniform block object
 			float deltaT;							//		Frame delta time
@@ -94,8 +112,10 @@ public:
 		vks::Buffer uboAttractor;				// Uniform buffer object containing particle system parameters
 		
 		struct SParticle {							// SSBO particle declaration
-			glm::vec2 pos;							// Particle position
-			glm::vec2 vel;							// Particle velocity
+			glm::vec3 pos;							// Particle position
+			float padding0;
+			glm::vec3 vel;							// Particle velocity
+			float padding1;
 			glm::vec4 gradientPos;					// Texture coordiantes for the gradient ramp map
 		};
 		vks::Buffer ssboParticles;					// (Shader) storage buffer object containing the particles
@@ -324,51 +344,6 @@ public:
 		}
 	}
 
-	// Setup and fill the compute shader storage buffers containing the particles
-	void BuildParticleSSBO()
-	{
-		std::default_random_engine rndEngine(benchmark.active ? 0 : (unsigned)time(nullptr));
-		std::uniform_real_distribution<float> rndDist(-1.0f, 1.0f);
-
-		// Initial particle positions
-		std::vector<SComputeUpdate::SParticle> particleBuffer(MAX_PARTICLE_COUNT);
-		for (auto& particle : particleBuffer) {
-			particle.pos = glm::vec2(rndDist(rndEngine), rndDist(rndEngine));
-			particle.vel = glm::vec2(0.0f);
-			particle.gradientPos.x = particle.pos.x / 2.0f;
-		}
-
-		VkDeviceSize storageBufferSize = particleBuffer.size() * sizeof(SComputeUpdate::SParticle);
-
-		// Staging
-		// SSBO won't be changed on the host after upload so copy to device local memory 
-
-		vks::Buffer stagingBuffer;
-
-		vulkanDevice->createBuffer(
-			VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-			VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-			&stagingBuffer,
-			storageBufferSize,
-			particleBuffer.data());
-
-		vulkanDevice->createBuffer(
-			// The SSBO will be used as a storage buffer for the compute pipeline and as a vertex buffer in the graphics pipeline
-			VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-			VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-			&m_update_binding.ssboParticles,
-			storageBufferSize);
-
-		// Copy to staging buffer
-		VkCommandBuffer copyCmd = VulkanExampleBase::createCommandBuffer(VK_COMMAND_BUFFER_LEVEL_PRIMARY, true);
-		VkBufferCopy copyRegion = {};
-		copyRegion.size = storageBufferSize;
-		vkCmdCopyBuffer(copyCmd, stagingBuffer.buffer, m_update_binding.ssboParticles.buffer, 1, &copyRegion);
-		VulkanExampleBase::flushCommandBuffer(copyCmd, queue, true);
-
-		stagingBuffer.destroy();
-	}
-
 	void prepareCompute()
 	{
 		// Create a compute capable device queue
@@ -505,6 +480,30 @@ public:
 		vkEndCommandBuffer(compute.commandBuffer);
 	}
 
+	// Setup and fill the compute shader storage buffers containing the particles
+	void BuildParticleSSBO()
+	{
+		std::default_random_engine rndEngine(benchmark.active ? 0 : (unsigned)time(nullptr));
+		std::uniform_real_distribution<float> rndDist(-1.0f, 1.0f);
+
+		// Initial particle positions
+		std::vector<SComputeUpdate::SParticle> particleBuffer(MAX_PARTICLE_COUNT);
+		for (auto& particle : particleBuffer) {
+			particle.pos = glm::vec3(rndDist(rndEngine), rndDist(rndEngine), 0);
+			particle.vel = glm::vec3(0.0f);
+			particle.gradientPos.x = particle.pos.x / 2.0f;
+		}
+
+		VkDeviceSize storageBufferSize = particleBuffer.size() * sizeof(SComputeUpdate::SParticle);
+
+		vulkanDevice->createBuffer(
+			VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+			VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+			&m_update_binding.ssboParticles,
+			storageBufferSize,
+			particleBuffer.data());
+	}
+	
 	void UpdateUniformBufferAttractor()
 	{
 		m_update_binding.attractorParams.deltaT = frameTimer * 2.5f;
@@ -542,6 +541,15 @@ public:
 	{
 		UpdateUniformBufferAttractor();
 		UpdateUniformBufferMarices();
+	}
+	void UpdateSSBO()
+	{
+
+	}
+	void Update()
+	{
+		UpdateUBO();
+		UpdateSSBO();
 	}
 	
 	void draw()

@@ -2,9 +2,11 @@
 
 struct Particle
 {
-	vec2 pos;
-	vec2 vel;
-	vec4 gradientPos;
+	vec3 pos;
+    float padding0;
+	vec3 vel;
+    float padding1;
+	vec4 gradientUV;
 };
 
 // Binding 0 : Position storage buffer
@@ -68,8 +70,8 @@ void main()
 
     // Write back
     particles[index].vel.xy = vVel;
-	particles[index].gradientPos.x += 0.02 * ubo.deltaT;
-	if (particles[index].gradientPos.x > 1.0)
-		particles[index].gradientPos.x -= 1.0;
+	particles[index].gradientUV.x += 0.02 * ubo.deltaT;
+	if (particles[index].gradientUV.x > 1.0)
+		particles[index].gradientUV.x -= 1.0;
 }
 
