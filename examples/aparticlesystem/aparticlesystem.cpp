@@ -23,9 +23,9 @@
 #define VERTEX_BUFFER_BIND_ID 0
 #if defined(__ANDROID__)
 // Lower particle count on Android for performance reasons
-#define PARTICLE_COUNT 128 * 1024
+#define MAX_PARTICLE_COUNT 128 * 1024
 #else
-#define PARTICLE_COUNT 256 * 1024
+#define MAX_PARTICLE_COUNT 256 * 1024
 #endif
 
 #if !(defined(VK_USE_PLATFORM_IOS_MVK) || defined(VK_USE_PLATFORM_MACOS_MVK))
@@ -52,15 +52,18 @@ public:
 		
 	}
 
+	uint32_t GetParticleCount() { return m_particle_count; };
 	const std::string& GetTex() { return m_particle_tex; }
 	const std::string& GetGradientTex() { return m_gradient_tex; }
 
 private:
-	uint32_t m_count = 0;
+	uint32_t m_particle_count = 100;
 	uint32_t m_interval = 0;
-
+	
 	std::string m_particle_tex = "textures/particle01_rgba.ktx";
 	std::string m_gradient_tex = "textures/particle_gradient_rgba.ktx";
+
+	glm::vec3 m_pos = { 0.0f, 0.0f, 0.0f };
 	
 };
 
@@ -79,12 +82,6 @@ public:
 		vks::Texture2D gradient;
 	} textures;
 
-	struct {
-		VkPipelineVertexInputStateCreateInfo inputState;
-		std::vector<VkVertexInputBindingDescription> bindingDescriptions;
-		std::vector<VkVertexInputAttributeDescription> attributeDescriptions;
-	} vertices;
-
 	uint32_t m_discriptor_count = 2;
 	// Resources for the compute particle updating
 	struct SComputeUpdate {
@@ -92,7 +89,7 @@ public:
 			float deltaT;							//		Frame delta time
 			float destX;							//		x position of the attractor
 			float destY;							//		y position of the attractor
-			int32_t particleCount = PARTICLE_COUNT;
+			int32_t particleCount;
 		} attractorParams;
 		vks::Buffer uboAttractor;				// Uniform buffer object containing particle system parameters
 		
@@ -241,10 +238,12 @@ public:
 			sizeof(m_composition_binding.sceneMatrices));
 		
 		std::vector<VkDescriptorSetLayoutBinding> setLayoutBindings = {
-			//Binding 0 : Particle color map
+			//Particle color map
 			vks::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT, 0),
-			//Binding 1 : Particle gradient ramp
+			//Particle gradient ramp
 			vks::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT, 1),
+			//VS UBO
+			vks::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_VERTEX_BIT, 2),								
 		};
 		VkDescriptorSetLayoutCreateInfo descriptorLayout = vks::initializers::descriptorSetLayoutCreateInfo(setLayoutBindings);
 		VK_CHECK_RESULT(vkCreateDescriptorSetLayout(device, &descriptorLayout, nullptr, &m_composition_binding.descriptorSetLayout));
@@ -260,6 +259,8 @@ public:
 			vks::initializers::writeDescriptorSet(m_composition_binding.descriptorSet, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 0, &textures.particle.descriptor),
 			// Binding 1 : Particle gradient ramp
 			vks::initializers::writeDescriptorSet(m_composition_binding.descriptorSet, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, &textures.gradient.descriptor),
+			//VS UBO
+			vks::initializers::writeDescriptorSet(m_composition_binding.descriptorSet, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 2, &m_composition_binding.uboSceneMatrices.descriptor),
 		};
 		vkUpdateDescriptorSets(device, static_cast<uint32_t>(writeDescriptorSets.size()), writeDescriptorSets.data(), 0, NULL);
 
@@ -290,8 +291,25 @@ public:
 			blendAttachmentState.srcAlphaBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
 			blendAttachmentState.dstAlphaBlendFactor = VK_BLEND_FACTOR_DST_ALPHA;
 
+			// Vertex input state for scene rendering
+			const std::vector<VkVertexInputBindingDescription> vertexInputBindings = {
+				vks::initializers::vertexInputBindingDescription(VERTEX_BUFFER_BIND_ID, sizeof(SComputeUpdate::SParticle), VK_VERTEX_INPUT_RATE_VERTEX)
+			};
+			// Describes memory layout and shader positions
+			const std::vector<VkVertexInputAttributeDescription> vertexInputAttributes = {
+				// Location 0 : Position
+				vks::initializers::vertexInputAttributeDescription(VERTEX_BUFFER_BIND_ID, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(SComputeUpdate::SParticle, pos)),
+				// Location 1 : Gradient position
+				vks::initializers::vertexInputAttributeDescription(VERTEX_BUFFER_BIND_ID, 1, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(SComputeUpdate::SParticle, gradientPos))
+			};
+			VkPipelineVertexInputStateCreateInfo vertexInputState = vks::initializers::pipelineVertexInputStateCreateInfo();
+			vertexInputState.vertexBindingDescriptionCount = static_cast<uint32_t>(vertexInputBindings.size());
+			vertexInputState.pVertexBindingDescriptions = vertexInputBindings.data();
+			vertexInputState.vertexAttributeDescriptionCount = static_cast<uint32_t>(vertexInputAttributes.size());
+			vertexInputState.pVertexAttributeDescriptions = vertexInputAttributes.data();
+
 			VkGraphicsPipelineCreateInfo pipelineCreateInfo = vks::initializers::pipelineCreateInfo(m_composition_binding.pipelineLayout, renderPass, 0);
-			pipelineCreateInfo.pVertexInputState = &vertices.inputState;
+			pipelineCreateInfo.pVertexInputState = &vertexInputState;
 			pipelineCreateInfo.pInputAssemblyState = &inputAssemblyState;
 			pipelineCreateInfo.pRasterizationState = &rasterizationState;
 			pipelineCreateInfo.pColorBlendState = &colorBlendState;
@@ -313,7 +331,7 @@ public:
 		std::uniform_real_distribution<float> rndDist(-1.0f, 1.0f);
 
 		// Initial particle positions
-		std::vector<SComputeUpdate::SParticle> particleBuffer(PARTICLE_COUNT);
+		std::vector<SComputeUpdate::SParticle> particleBuffer(MAX_PARTICLE_COUNT);
 		for (auto& particle : particleBuffer) {
 			particle.pos = glm::vec2(rndDist(rndEngine), rndDist(rndEngine));
 			particle.vel = glm::vec2(0.0f);
@@ -349,27 +367,6 @@ public:
 		VulkanExampleBase::flushCommandBuffer(copyCmd, queue, true);
 
 		stagingBuffer.destroy();
-
-		// Binding description
-		vertices.bindingDescriptions = {
-			vks::initializers::vertexInputBindingDescription(VERTEX_BUFFER_BIND_ID, sizeof(SComputeUpdate::SParticle), VK_VERTEX_INPUT_RATE_VERTEX)
-		};
-
-		// Attribute descriptions
-		// Describes memory layout and shader positions
-		vertices.attributeDescriptions = {
-			// Location 0 : Position
-			vks::initializers::vertexInputAttributeDescription(VERTEX_BUFFER_BIND_ID, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(SComputeUpdate::SParticle, pos)),
-			// Location 1 : Gradient position
-			vks::initializers::vertexInputAttributeDescription(VERTEX_BUFFER_BIND_ID, 1, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(SComputeUpdate::SParticle, gradientPos))
-		};
-
-		// Assign to vertex buffer
-		vertices.inputState = vks::initializers::pipelineVertexInputStateCreateInfo();
-		vertices.inputState.vertexBindingDescriptionCount = static_cast<uint32_t>(vertices.bindingDescriptions.size());
-		vertices.inputState.pVertexBindingDescriptions = vertices.bindingDescriptions.data();
-		vertices.inputState.vertexAttributeDescriptionCount = static_cast<uint32_t>(vertices.attributeDescriptions.size());
-		vertices.inputState.pVertexAttributeDescriptions = vertices.attributeDescriptions.data();
 	}
 
 	void prepareCompute()
@@ -445,7 +442,7 @@ public:
 
 			VkDeviceSize offsets[1] = { 0 };
 			vkCmdBindVertexBuffers(drawCmdBuffers[i], VERTEX_BUFFER_BIND_ID, 1, &m_update_binding.ssboParticles.buffer, offsets);
-			vkCmdDraw(drawCmdBuffers[i], PARTICLE_COUNT, 1, 0, 0);
+			vkCmdDraw(drawCmdBuffers[i], m_particles.GetParticleCount(), 1, 0, 0);
 
 			drawUI(drawCmdBuffers[i]);
 
@@ -485,7 +482,7 @@ public:
 		vkCmdBindDescriptorSets(compute.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, m_update_binding.pipelineLayout, 0, 1, &m_update_binding.descriptorSet, 0, 0);
 
 		// Dispatch the compute job
-		vkCmdDispatch(compute.commandBuffer, PARTICLE_COUNT / 256, 1, 1);
+		vkCmdDispatch(compute.commandBuffer, (m_particles.GetParticleCount()+255) / 256, 1, 1);
 
 		// Add memory barrier to ensure that compute shader has finished writing to the buffer
 		// Without this the (rendering) vertex shader may display incomplete results (partial data from last frame) 
@@ -508,7 +505,7 @@ public:
 		vkEndCommandBuffer(compute.commandBuffer);
 	}
 
-	void updateUniformBufferAttractor()
+	void UpdateUniformBufferAttractor()
 	{
 		m_update_binding.attractorParams.deltaT = frameTimer * 2.5f;
 		if (m_animate)
@@ -523,13 +520,14 @@ public:
 			m_update_binding.attractorParams.destX = normalizedMx;
 			m_update_binding.attractorParams.destY = normalizedMy;
 		}
+		m_update_binding.attractorParams.particleCount = m_particles.GetParticleCount();
 
 		// Map for host access
 		VK_CHECK_RESULT(m_update_binding.uboAttractor.map());
 		memcpy(m_update_binding.uboAttractor.mapped, &m_update_binding.attractorParams, sizeof(m_update_binding.attractorParams));
 		m_update_binding.uboAttractor.unmap();
 	}
-	void updateUniformBufferMarices()
+	void UpdateUniformBufferMarices()
 	{
 		m_composition_binding.sceneMatrices.projection = camera.matrices.perspective;
 		m_composition_binding.sceneMatrices.view = camera.matrices.view;
@@ -542,8 +540,8 @@ public:
 	}
 	void UpdateUBO()
 	{
-		updateUniformBufferAttractor();
-		updateUniformBufferMarices();
+		UpdateUniformBufferAttractor();
+		UpdateUniformBufferMarices();
 	}
 	
 	void draw()
