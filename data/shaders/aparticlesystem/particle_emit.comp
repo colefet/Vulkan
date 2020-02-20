@@ -1,0 +1,42 @@
+#version 450
+
+//todo:common.h
+struct Particle
+{
+	vec3 pos;
+    float padding0;
+	vec3 vel;
+    float padding1;
+	vec4 gradientUV;
+};
+
+layout (binding = 0) uniform UBOEmitter
+{
+	float emitCount;
+	float padding0;
+	float padding1;
+	int padding2;
+} uEmitter;
+
+//Particle storage buffer
+layout(std140, binding = 1) buffer Pos 
+{
+   Particle particles[ ];
+};
+
+
+layout (local_size_x = 256) in;
+void main() 
+{
+    // Current SSBO index
+    uint index = gl_GlobalInvocationID.x;
+	// Don't try to write beyond particle count
+    if (index >= uEmitter.emitCount) {return;}
+
+
+    // create new particle
+    particles[index].pos = vec3(0,0,0);
+    particles[index].vel = vec3(0,0,0);
+	particles[index].gradientUV = vec4(0,0,0,0);
+}
+
