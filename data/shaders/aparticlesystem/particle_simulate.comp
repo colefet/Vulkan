@@ -19,7 +19,7 @@ layout (binding = 0) uniform UBO
 } ubo;
 
 //Particle storage buffer
-layout(std140, binding = 1) buffer Pos 
+layout(std140, binding = 1) buffer SSBOParticle 
 {
    Particle particles[ ];
 };

@@ -124,8 +124,42 @@ public:
 	struct {
 		vks::Texture2D particle;
 		vks::Texture2D gradient;
-	} textures;
+		void Destroy()
+		{
+			particle.destroy();
+			particle.destroy();
+		}
+	} m_textures;
 
+	struct SSBOs{
+		struct SParticle {							// SSBO particle declaration
+			glm::vec3 pos;							// Particle position
+			float padding0;
+			glm::vec3 vel;							// Particle velocity
+			float padding1;
+			glm::vec4 gradientPos;					// Texture coordiantes for the gradient ramp map
+		};
+		struct SCounter {							// SSBO particle declaration
+			uint32_t emit_count;
+			uint32_t dead_count;
+			uint32_t alive_count;
+			uint32_t padding;
+		};
+		vks::Buffer particles;
+		vks::Buffer dead_list;
+		vks::Buffer alive_list;
+		vks::Buffer alive_list_after_simulate;
+		vks::Buffer counter;
+		void Destroy()
+		{
+			counter.destroy();
+			alive_list_after_simulate.destroy();
+			alive_list.destroy();
+			dead_list.destroy();
+			particles.destroy();
+		}
+	} m_SSBOs;
+	
 	uint32_t m_discriptor_count = 2;
 	// Resources for the compute particle simulation
 	struct SComputeEmission {
@@ -137,14 +171,6 @@ public:
 		} emitterParams;
 		vks::Buffer uboEmitter;				// Uniform buffer object containing particle system parameters
 
-		struct SParticle {							// SSBO particle declaration
-			glm::vec3 pos;							// Particle position
-			float padding0;
-			glm::vec3 vel;							// Particle velocity
-			float padding1;
-			glm::vec4 gradientPos;					// Texture coordiantes for the gradient ramp map
-		};
-		vks::Buffer ssboParticles;					// (Shader) storage buffer object containing the particles
 		VkDescriptorSetLayout descriptorSetLayout;	// shader binding layout
 		VkDescriptorSet descriptorSet;				// shader bindings
 		VkPipelineLayout pipelineLayout;			// Layout of pipeline
@@ -154,7 +180,6 @@ public:
 			vkDestroyPipeline(device, pipeline, nullptr);
 			vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
 			vkDestroyDescriptorSetLayout(device, descriptorSetLayout, nullptr);
-			ssboParticles.destroy();
 			uboEmitter.destroy();
 		}
 	} m_emission_binding;
@@ -168,14 +193,7 @@ public:
 		} attractorParams;
 		vks::Buffer uboAttractor;				// Uniform buffer object containing particle system parameters
 		
-		struct SParticle {							// SSBO particle declaration
-			glm::vec3 pos;							// Particle position
-			float padding0;
-			glm::vec3 vel;							// Particle velocity
-			float padding1;
-			glm::vec4 gradientPos;					// Texture coordiantes for the gradient ramp map
-		};
-		vks::Buffer ssboParticles;					// (Shader) storage buffer object containing the particles
+	
 		VkDescriptorSetLayout descriptorSetLayout;	// shader binding layout
 		VkDescriptorSet descriptorSet;				// shader bindings
 		VkPipelineLayout pipelineLayout;			// Layout of pipeline
@@ -185,7 +203,6 @@ public:
 			vkDestroyPipeline(device, pipeline, nullptr);
 			vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
 			vkDestroyDescriptorSetLayout(device, descriptorSetLayout, nullptr);
-			ssboParticles.destroy();
 			uboAttractor.destroy();
 		}
 	} m_simulation_binding;
@@ -246,14 +263,14 @@ public:
 		vkDestroyFence(device, compute.fence, nullptr);
 		vkDestroyCommandPool(device, compute.commandPool, nullptr);
 
-		textures.particle.destroy();
-		textures.gradient.destroy();
+		m_textures.Destroy();
+		m_SSBOs.Destroy();
 	}
 
 	void LoadAssets()
 	{
-		textures.particle.loadFromFile(getAssetPath() + m_particles.GetTex(), VK_FORMAT_R8G8B8A8_UNORM, vulkanDevice, queue);
-		textures.gradient.loadFromFile(getAssetPath() + m_particles.GetGradientTex(), VK_FORMAT_R8G8B8A8_UNORM, vulkanDevice, queue);
+		m_textures.particle.loadFromFile(getAssetPath() + m_particles.GetTex(), VK_FORMAT_R8G8B8A8_UNORM, vulkanDevice, queue);
+		m_textures.gradient.loadFromFile(getAssetPath() + m_particles.GetGradientTex(), VK_FORMAT_R8G8B8A8_UNORM, vulkanDevice, queue);
 	}
 
 	void SetupDescriptorPool()
@@ -296,7 +313,7 @@ public:
 			// Uniform buffer
 			vks::initializers::writeDescriptorSet(m_emission_binding.descriptorSet, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 0, &m_emission_binding.uboEmitter.descriptor),
 			// Particle position storage buffer
-			vks::initializers::writeDescriptorSet(m_emission_binding.descriptorSet, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, &m_emission_binding.ssboParticles.descriptor),
+			vks::initializers::writeDescriptorSet(m_emission_binding.descriptorSet, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, &m_SSBOs.particles.descriptor),
 		};
 		vkUpdateDescriptorSets(device, static_cast<uint32_t>(writeDescriptorSets.size()), writeDescriptorSets.data(), 0, NULL);
 
@@ -308,8 +325,6 @@ public:
 	
 	void BuildComputeSimulation()
 	{
-		// Particles ssbo
-		BuildParticleSSBO();
 		// Attactor ubo
 		vulkanDevice->createBuffer(
 			VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
@@ -336,7 +351,7 @@ public:
 			// Uniform buffer
 			vks::initializers::writeDescriptorSet(m_simulation_binding.descriptorSet, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 0, &m_simulation_binding.uboAttractor.descriptor),
 			// Particle storage buffer
-			vks::initializers::writeDescriptorSet(m_simulation_binding.descriptorSet, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, &m_simulation_binding.ssboParticles.descriptor),
+			vks::initializers::writeDescriptorSet(m_simulation_binding.descriptorSet, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, &m_SSBOs.particles.descriptor),
 		};
 		vkUpdateDescriptorSets(device, static_cast<uint32_t>(writeDescriptorSets.size()), writeDescriptorSets.data(), 0, NULL);
 
@@ -374,9 +389,9 @@ public:
 
 		std::vector<VkWriteDescriptorSet> writeDescriptorSets = {
 			// Binding 0 : Particle color map
-			vks::initializers::writeDescriptorSet(m_composition_binding.descriptorSet, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 0, &textures.particle.descriptor),
+			vks::initializers::writeDescriptorSet(m_composition_binding.descriptorSet, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 0, &m_textures.particle.descriptor),
 			// Binding 1 : Particle gradient ramp
-			vks::initializers::writeDescriptorSet(m_composition_binding.descriptorSet, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, &textures.gradient.descriptor),
+			vks::initializers::writeDescriptorSet(m_composition_binding.descriptorSet, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, &m_textures.gradient.descriptor),
 			//VS UBO
 			vks::initializers::writeDescriptorSet(m_composition_binding.descriptorSet, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 2, &m_composition_binding.uboSceneMatrices.descriptor),
 		};
@@ -411,14 +426,14 @@ public:
 
 			// Vertex input state for scene rendering
 			const std::vector<VkVertexInputBindingDescription> vertexInputBindings = {
-				vks::initializers::vertexInputBindingDescription(VERTEX_BUFFER_BIND_ID, sizeof(SComputeSimulation::SParticle), VK_VERTEX_INPUT_RATE_VERTEX)
+				vks::initializers::vertexInputBindingDescription(VERTEX_BUFFER_BIND_ID, sizeof(SSBOs::SParticle), VK_VERTEX_INPUT_RATE_VERTEX)
 			};
 			// Describes memory layout and shader positions
 			const std::vector<VkVertexInputAttributeDescription> vertexInputAttributes = {
 				// Location 0 : Position
-				vks::initializers::vertexInputAttributeDescription(VERTEX_BUFFER_BIND_ID, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(SComputeSimulation::SParticle, pos)),
+				vks::initializers::vertexInputAttributeDescription(VERTEX_BUFFER_BIND_ID, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(SSBOs::SParticle, pos)),
 				// Location 1 : Gradient position
-				vks::initializers::vertexInputAttributeDescription(VERTEX_BUFFER_BIND_ID, 1, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(SComputeSimulation::SParticle, gradientPos))
+				vks::initializers::vertexInputAttributeDescription(VERTEX_BUFFER_BIND_ID, 1, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(SSBOs::SParticle, gradientPos))
 			};
 			VkPipelineVertexInputStateCreateInfo vertexInputState = vks::initializers::pipelineVertexInputStateCreateInfo();
 			vertexInputState.vertexBindingDescriptionCount = static_cast<uint32_t>(vertexInputBindings.size());
@@ -514,7 +529,7 @@ public:
 			vkCmdBindDescriptorSets(drawCmdBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, m_composition_binding.pipelineLayout, 0, 1, &m_composition_binding.descriptorSet, 0, NULL);
 
 			VkDeviceSize offsets[1] = { 0 };
-			vkCmdBindVertexBuffers(drawCmdBuffers[i], VERTEX_BUFFER_BIND_ID, 1, &m_simulation_binding.ssboParticles.buffer, offsets);
+			vkCmdBindVertexBuffers(drawCmdBuffers[i], VERTEX_BUFFER_BIND_ID, 1, &m_SSBOs.particles.buffer, offsets);
 			vkCmdDraw(drawCmdBuffers[i], m_particles.GetParticleCount(), 1, 0, 0);
 
 			drawUI(drawCmdBuffers[i]);
@@ -535,8 +550,8 @@ public:
 
 		// Add memory barrier to ensure that the (graphics) vertex shader has fetched attributes before compute starts to write to the buffer
 		VkBufferMemoryBarrier bufferBarrier = vks::initializers::bufferMemoryBarrier();
-		bufferBarrier.buffer = m_simulation_binding.ssboParticles.buffer;
-		bufferBarrier.size = m_simulation_binding.ssboParticles.descriptor.range;
+		bufferBarrier.buffer = m_SSBOs.particles.buffer;
+		bufferBarrier.size = m_SSBOs.particles.descriptor.range;
 		bufferBarrier.srcAccessMask = VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT;						// Vertex shader invocations have finished reading from the buffer
 		bufferBarrier.dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;								// Compute shader wants to write to the buffer
 		// Compute and graphics queue may have different queue families (see VulkanDevice::createLogicalDevice)
@@ -561,8 +576,8 @@ public:
 		// Without this the (rendering) vertex shader may display incomplete results (partial data from last frame) 
 		bufferBarrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;								// Compute shader has finished writes to the buffer
 		bufferBarrier.dstAccessMask = VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT;						// Vertex shader invocations want to read from the buffer
-		bufferBarrier.buffer = m_simulation_binding.ssboParticles.buffer;
-		bufferBarrier.size = m_simulation_binding.ssboParticles.descriptor.range;
+		bufferBarrier.buffer = m_SSBOs.particles.buffer;
+		bufferBarrier.size = m_SSBOs.particles.descriptor.range;
 		// Compute and graphics queue may have different queue families (see VulkanDevice::createLogicalDevice)
 		// For the barrier to work across different queues, we need to set their family indices
 		bufferBarrier.srcQueueFamilyIndex = vulkanDevice->queueFamilyIndices.compute;			// Required as compute and graphics queue may have different families
@@ -579,52 +594,177 @@ public:
 	}
 
 	// Setup and fill the compute shader storage buffers containing the particles
-	void BuildParticleSSBO()
+	void BuildSSBO()
 	{
-		std::default_random_engine rndEngine(benchmark.active ? 0 : (unsigned)time(nullptr));
-		std::uniform_real_distribution<float> rndDist(-1.0f, 1.0f);
+		//Particle buffer
+		{
+			std::default_random_engine rndEngine(benchmark.active ? 0 : (unsigned)time(nullptr));
+			std::uniform_real_distribution<float> rndDist(-1.0f, 1.0f);
 
-		// Initial particle positions
-		std::vector<SComputeSimulation::SParticle> particleBuffer(m_particles.GetMaxParticleCount());
-		for (auto& particle : particleBuffer) {
-			particle.pos = glm::vec3(rndDist(rndEngine), rndDist(rndEngine), 0);
-			particle.vel = glm::vec3(0.0f);
-			particle.gradientPos.x = particle.pos.x / 2.0f;
+			// Initial particle positions
+			std::vector<SSBOs::SParticle> particleBuffer(m_particles.GetMaxParticleCount());
+			for (auto& particle : particleBuffer) {
+				particle.pos = glm::vec3(rndDist(rndEngine), rndDist(rndEngine),0.0f);
+				particle.vel = glm::vec3(0.0f);
+				particle.gradientPos.x = particle.pos.x / 2.0f;
+			}
+			
+			//std::vector<SSBOs::SParticle> particleBuffer(m_particles.GetMaxParticleCount());
+			
+			// Staging
+			// SSBO won't be changed on the host after upload so copy to device local memory
+			vks::Buffer stagingBuffer;
+			VkDeviceSize storageBufferSize = particleBuffer.size() * sizeof(SSBOs::SParticle);
+			vulkanDevice->createBuffer(
+				VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+				VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+				&stagingBuffer,
+				storageBufferSize,
+				particleBuffer.data());
+
+			vulkanDevice->createBuffer(
+				// The SSBO will be used as a storage buffer for the compute pipeline and as a vertex buffer in the graphics pipeline
+				VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+				VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+				&m_SSBOs.particles,
+				storageBufferSize);
+			
+			// Copy to staging buffer
+			VkCommandBuffer copyCmd = VulkanExampleBase::createCommandBuffer(VK_COMMAND_BUFFER_LEVEL_PRIMARY, true);
+			VkBufferCopy copyRegion = {};
+			copyRegion.size = storageBufferSize;
+			vkCmdCopyBuffer(copyCmd, stagingBuffer.buffer, m_SSBOs.particles.buffer, 1, &copyRegion);
+			VulkanExampleBase::flushCommandBuffer(copyCmd, queue, true);
+			stagingBuffer.destroy();
 		}
+		 //dead list
+		{
+			std::vector<uint32_t> dead_list(m_particles.GetMaxParticleCount());
+			for (uint32_t i = 0; i < dead_list.size(); ++i)
+			{
+				dead_list[i] = i;
+			}
+			
+			// Staging
+			// SSBO won't be changed on the host after upload so copy to device local memory
+			vks::Buffer stagingBuffer;
+			VkDeviceSize storageBufferSize = dead_list.size() * sizeof(uint32_t);
+			vulkanDevice->createBuffer(
+				VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+				VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+				&stagingBuffer,
+				storageBufferSize,
+				dead_list.data());
 
-		VkDeviceSize storageBufferSize = particleBuffer.size() * sizeof(SComputeSimulation::SParticle);
+			vulkanDevice->createBuffer(
+				// The SSBO will be used as a storage buffer for the compute pipeline and as a vertex buffer in the graphics pipeline
+				VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+				VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+				&m_SSBOs.dead_list,
+				storageBufferSize);
 
-		/*vulkanDevice->createBuffer(
-			VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-			VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-			&m_update_binding.ssboParticles,
-			storageBufferSize,
-			particleBuffer.data());*/
-		
-		// Staging
-		// SSBO won't be changed on the host after upload so copy to device local memory 
-		//vks::Buffer stagingBuffer;
-		vulkanDevice->createBuffer(
-			VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-			VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-			&stagingBuffer,
-			storageBufferSize,
-			particleBuffer.data());
+			// Copy to staging buffer
+			VkCommandBuffer copyCmd = VulkanExampleBase::createCommandBuffer(VK_COMMAND_BUFFER_LEVEL_PRIMARY, true);
+			VkBufferCopy copyRegion = {};
+			copyRegion.size = storageBufferSize;
+			vkCmdCopyBuffer(copyCmd, stagingBuffer.buffer, m_SSBOs.dead_list.buffer, 1, &copyRegion);
+			VulkanExampleBase::flushCommandBuffer(copyCmd, queue, true);
+			stagingBuffer.destroy();
+		}
+		// alive list
+		{
+			std::vector<uint32_t> alive_list(m_particles.GetMaxParticleCount());
 
-		vulkanDevice->createBuffer(
-			// The SSBO will be used as a storage buffer for the compute pipeline and as a vertex buffer in the graphics pipeline
-			VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-			VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-			&m_simulation_binding.ssboParticles,
-			storageBufferSize);
+			// Staging
+			// SSBO won't be changed on the host after upload so copy to device local memory
+			vks::Buffer stagingBuffer;
+			VkDeviceSize storageBufferSize = alive_list.size() * sizeof(uint32_t);
+			vulkanDevice->createBuffer(
+				VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+				VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+				&stagingBuffer,
+				storageBufferSize,
+				alive_list.data());
 
-		// Copy to staging buffer
-		VkCommandBuffer copyCmd = VulkanExampleBase::createCommandBuffer(VK_COMMAND_BUFFER_LEVEL_PRIMARY, true);
-		VkBufferCopy copyRegion = {};
-		copyRegion.size = storageBufferSize;
-		vkCmdCopyBuffer(copyCmd, stagingBuffer.buffer, m_simulation_binding.ssboParticles.buffer, 1, &copyRegion);
-		VulkanExampleBase::flushCommandBuffer(copyCmd, queue, true);
-		//stagingBuffer.destroy();
+			vulkanDevice->createBuffer(
+				// The SSBO will be used as a storage buffer for the compute pipeline and as a vertex buffer in the graphics pipeline
+				VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+				VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+				&m_SSBOs.alive_list,
+				storageBufferSize);
+
+			// Copy to staging buffer
+			VkCommandBuffer copyCmd = VulkanExampleBase::createCommandBuffer(VK_COMMAND_BUFFER_LEVEL_PRIMARY, true);
+			VkBufferCopy copyRegion = {};
+			copyRegion.size = storageBufferSize;
+			vkCmdCopyBuffer(copyCmd, stagingBuffer.buffer, m_SSBOs.alive_list.buffer, 1, &copyRegion);
+			VulkanExampleBase::flushCommandBuffer(copyCmd, queue, true);
+			stagingBuffer.destroy();
+		}
+		// alive list after simulate
+		{
+			std::vector<uint32_t> alive_list_after_simulate(m_particles.GetMaxParticleCount());
+
+			// Staging
+			// SSBO won't be changed on the host after upload so copy to device local memory
+			vks::Buffer stagingBuffer;
+			VkDeviceSize storageBufferSize = alive_list_after_simulate.size() * sizeof(uint32_t);
+			vulkanDevice->createBuffer(
+				VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+				VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+				&stagingBuffer,
+				storageBufferSize,
+				alive_list_after_simulate.data());
+
+			vulkanDevice->createBuffer(
+				// The SSBO will be used as a storage buffer for the compute pipeline and as a vertex buffer in the graphics pipeline
+				VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+				VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+				&m_SSBOs.alive_list_after_simulate,
+				storageBufferSize);
+
+			// Copy to staging buffer
+			VkCommandBuffer copyCmd = VulkanExampleBase::createCommandBuffer(VK_COMMAND_BUFFER_LEVEL_PRIMARY, true);
+			VkBufferCopy copyRegion = {};
+			copyRegion.size = storageBufferSize;
+			vkCmdCopyBuffer(copyCmd, stagingBuffer.buffer, m_SSBOs.alive_list_after_simulate.buffer, 1, &copyRegion);
+			VulkanExampleBase::flushCommandBuffer(copyCmd, queue, true);
+			stagingBuffer.destroy();
+		}
+		// counter
+		{
+			uint32_t emit_count = 0;
+			uint32_t dead_count = m_particles.GetMaxParticleCount();
+			uint32_t alive_count = 0;
+			uint32_t alive_count_after_simulate = 0;
+			std::vector<uint32_t> counter ={ emit_count, dead_count, alive_count, alive_count_after_simulate };
+
+			// Staging
+			// SSBO won't be changed on the host after upload so copy to device local memory
+			vks::Buffer stagingBuffer;
+			VkDeviceSize storageBufferSize = counter.size() * sizeof(uint32_t);
+			vulkanDevice->createBuffer(
+				VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+				VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+				&stagingBuffer,
+				storageBufferSize,
+				counter.data());
+
+			vulkanDevice->createBuffer(
+				// The SSBO will be used as a storage buffer for the compute pipeline and as a vertex buffer in the graphics pipeline
+				VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+				VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+				&m_SSBOs.alive_list_after_simulate,
+				storageBufferSize);
+
+			// Copy to staging buffer
+			VkCommandBuffer copyCmd = VulkanExampleBase::createCommandBuffer(VK_COMMAND_BUFFER_LEVEL_PRIMARY, true);
+			VkBufferCopy copyRegion = {};
+			copyRegion.size = storageBufferSize;
+			vkCmdCopyBuffer(copyCmd, stagingBuffer.buffer, m_SSBOs.alive_list_after_simulate.buffer, 1, &copyRegion);
+			VulkanExampleBase::flushCommandBuffer(copyCmd, queue, true);
+			stagingBuffer.destroy();
+		}
 	}
 
 	void UpdateUBOEmitter()
@@ -676,44 +816,12 @@ public:
 		UpdateUniformBufferAttractor();
 		UpdateUniformBufferMarices();
 	}
-	void UpdateSSBO()
-	{
-		std::default_random_engine rndEngine(benchmark.active ? 0 : (unsigned)time(nullptr));
-		std::uniform_real_distribution<float> rndDist(-1.0f, 1.0f);
 
-		// Initial particle positions
-		std::vector<SComputeSimulation::SParticle> particleBuffer(m_particles.GetMaxParticleCount());
-		for (auto& particle : particleBuffer) {
-			particle.pos = glm::vec3(rndDist(rndEngine), rndDist(rndEngine), 0);
-			particle.vel = glm::vec3(0.0f);
-			particle.gradientPos.x = particle.pos.x / 2.0f;
-		}
-
-		VkDeviceSize storageBufferSize = particleBuffer.size() * sizeof(SComputeSimulation::SParticle);
-
-		// Map for host access
-		VK_CHECK_RESULT(stagingBuffer.map());
-		memcpy(stagingBuffer.mapped, particleBuffer.data(), storageBufferSize);
-		stagingBuffer.unmap();
-		
-		// Staging
-		// SSBO won't be changed on the host after upload so copy to device local memory 
-		//vks::Buffer stagingBuffer;
-
-		// Copy to staging buffer
-		VkCommandBuffer copyCmd = VulkanExampleBase::createCommandBuffer(VK_COMMAND_BUFFER_LEVEL_PRIMARY, true);
-		VkBufferCopy copyRegion = {};
-		copyRegion.size = storageBufferSize;
-		vkCmdCopyBuffer(copyCmd, stagingBuffer.buffer, m_simulation_binding.ssboParticles.buffer, 1, &copyRegion);
-		VulkanExampleBase::flushCommandBuffer(copyCmd, queue, true);
-		//stagingBuffer.destroy();
-	}
 	void Update()
 	{
 		//std::cout << frameTimer << std::endl;
 		m_particles.Update(frameTimer);
 		UpdateUBO();
-		//UpdateSSBO();
 	}
 	
 	void draw()
@@ -742,6 +850,7 @@ public:
 	{
 		VulkanExampleBase::prepare();
 		LoadAssets();
+		BuildSSBO();
 		
 		SetupDescriptorPool();
 		BuildComputeSimulation();

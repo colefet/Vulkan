@@ -19,11 +19,28 @@ layout (binding = 0) uniform UBOEmitter
 } uEmitter;
 
 //Particle storage buffer
-layout(std140, binding = 1) buffer Pos 
+layout(std140, binding = 1) buffer SSBOParticle 
 {
-   Particle particles[ ];
+    Particle particles[ ];
 };
-
+layout(std140, binding = 2) buffer SSBODead
+{
+    uint dead_list[ ];
+};
+layout(std140, binding = 3) buffer SSBOAlive1
+{
+    uint alive_list1[ ];
+};
+layout(std140, binding = 4) buffer SSBOAlive2
+{
+    uint alive_list2[ ];
+};
+layout(std140, binding = 5) buffer SSBOCounter
+{
+    uint emit_count;
+    uint dead_count;
+    uint alive_count;
+};
 
 layout (local_size_x = 256) in;
 void main() 
@@ -31,12 +48,21 @@ void main()
     // Current SSBO index
     uint index = gl_GlobalInvocationID.x;
 	// Don't try to write beyond particle count
-    if (index >= uEmitter.emitCount) {return;}
+    if (index >= emit_count) {return;}
 
+    // new particle index retrieved from dead list (pop):
+    uint deadCount = dead_count;
+    uint newParticleIndex = dead_list[deadCount-1];
+    uCounter.dead_count-=1;
 
     // create new particle
-    particles[index].pos = vec3(0,0,0);
-    particles[index].vel = vec3(0,0,0);
-	particles[index].gradientUV = vec4(0,0,0,0);
+    particles[newParticleIndex].pos = vec3(0,0,0);
+    particles[newParticleIndex].vel = vec3(0,0,0);
+	particles[newParticleIndex].gradientUV = vec4(0,0,0,0);
+
+    // and add index to the alive list (push):
+    uint aliveCount = alive_count;
+    alive_list1[aliveCount]=newParticleIndex;
+    uCounter.alive_count+=1;
 }
 
