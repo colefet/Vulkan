@@ -1,0 +1,43 @@
+#version 450
+#define THREADCOUNT_EMIT 256
+#define THREADCOUNT_SIMULATION 256
+
+layout (binding = 0) uniform UBOEmitter
+{
+	uint emitCount;
+	uint particleLifeMax;
+	float randomSeed;
+	float padding2;
+} uboEmitter;
+
+// storage buffer
+layout(std140, binding = 1) buffer SSBOCounter
+{
+    uint emitCount;
+    uint deadCount;
+    uint aliveCount;
+    uint aliveCountAfterSimulate;
+}ssboCounter;
+layout(std140, binding = 2) buffer SSBOIndirect
+{
+    uvec3 emitParam;
+    uvec3 simulateParam;
+    uvec4 drawParam;
+    float padding0;
+    float padding1;
+}ssboIndirect;
+
+layout (local_size_x = 1) in;
+void main() 
+{
+    uint emit_count = min(ssboCounter.deadCount, uboEmitter.emitCount);
+    uint alive_count = ssboCounter.aliveCountAfterSimulate;
+
+    ssboIndirect.emitParam=uvec3(ceil(float(emit_count)/float(THREADCOUNT_EMIT)),1,1);
+    ssboIndirect.simulateParam=uvec3(ceil(float(alive_count + emit_count)/float(THREADCOUNT_SIMULATION)),1,1);
+
+    ssboCounter.emitCount=emit_count;
+    ssboCounter.aliveCount=alive_count;
+    ssboCounter.aliveCountAfterSimulate=0;//reset
+}
+

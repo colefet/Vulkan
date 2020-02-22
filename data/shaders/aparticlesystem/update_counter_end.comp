@@ -22,23 +22,15 @@ layout(std140, binding = 2) buffer SSBOIndirect
 {
     uvec3 emitParam;
     uvec3 simulateParam;
-    uvec3 drawParam;
+    uvec4 drawParam;
     float padding0;
     float padding1;
-    float padding2;
 }ssboIndirect;
 
 layout (local_size_x = 1) in;
 void main() 
 {
-    uint emit_count = min(ssboCounter.deadCount, uboEmitter.emitCount);
     uint alive_count = ssboCounter.aliveCountAfterSimulate;
-
-    ssboIndirect.emitParam=uvec3(ceil(float(emit_count)/float(THREADCOUNT_EMIT)),1,1);
-    ssboIndirect.simulateParam=uvec3(ceil(float(alive_count + emit_count)/float(THREADCOUNT_SIMULATION)),1,1);
-
-    ssboCounter.emitCount=emit_count;
-    ssboCounter.aliveCount=alive_count;
-    ssboCounter.aliveCountAfterSimulate=0;
+    ssboIndirect.drawParam=uvec4(alive_count,1,0,0);
 }
 

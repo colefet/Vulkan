@@ -65,7 +65,6 @@ public:
 	~CParticleSystem(){};
 	void Initial(float timer)
 	{
-		m_last_update_time = timer*1000;
 		m_age = 0;
 	}
 	void Destroy(VkDevice device)
@@ -73,7 +72,7 @@ public:
 	}
 	void Update(float timer)
 	{
-		m_delta_time += (timer * 1000 -m_last_update_time);
+		m_delta_time += (timer * 1000 );
 		m_age += floorf(m_delta_time);
 		m_delta_time -= floorf(m_delta_time);
 
@@ -82,6 +81,7 @@ public:
 	};
 	
 	uint32_t GetEmitParticleCount() { return m_next_emit_count; };
+	uint32_t GetEmitParticleLifeMax() { return m_particle_life_max; };
 	
 	uint32_t GetMaxParticleCount() { return m_max_particle_count; };
 	uint32_t GetParticleCount() { return m_particle_count; };
@@ -90,7 +90,6 @@ public:
 
 private:
 	uint32_t m_age = 0;//ms
-	float m_last_update_time = 0;//ms
 	float m_delta_time = 0;//ms
 	uint32_t m_emitted_count = 0;//emitted particle count
 	uint32_t m_next_emit_count = 0;//emit particle count next time
@@ -99,8 +98,10 @@ private:
 	uint32_t m_particle_count = 10;//current partcle count
 
 	//Emission
-	uint32_t m_emit_count = 10;
-	uint32_t m_emit_interval = 10;
+	uint32_t m_emit_count = 1;
+	uint32_t m_emit_interval = 1;
+
+	uint32_t m_particle_life_max = 2000;
 	
 	//Simulation
 	glm::vec3 m_pos = { 0.0f, 0.0f, 0.0f };
@@ -113,7 +114,6 @@ private:
 class VulkanExample : public VulkanExampleBase
 {
 public:
-	vks::Buffer stagingBuffer;
 	CParticleSystem m_particles;
 	float timer = 0.0f;
 	float animStart = 20.0f;
@@ -134,9 +134,9 @@ public:
 	struct UBOs
 	{
 		struct SEmitterParam {					// Compute shader uniform block object
-			uint32_t emitCount;						//		Frame emit particle count
-			float padding0;							//		x position of the attractor
-			float padding1;							//		y position of the attractor
+			uint32_t emitCount;					//		Frame emit particle count
+			uint32_t particleLifeMax;
+			float randomSeed;
 			int32_t padding2;
 		} emitterParams;
 		vks::Buffer uboEmitter;				// Uniform buffer object containing particle system parameters
@@ -149,25 +149,28 @@ public:
 	struct SSBOs{
 		struct SParticle {							// SSBO particle declaration
 			glm::vec3 pos;							// Particle position
-			float padding0;
+			float lifeMax;
 			glm::vec3 vel;							// Particle velocity
-			float padding1;
+			float life;
 			glm::vec4 gradientPos;					// Texture coordiantes for the gradient ramp map
 		};
 		vks::Buffer ssboParticles;
 		vks::Buffer ssboDeadList;
 		vks::Buffer ssboAliveList;
 		vks::Buffer ssboAliveListAfterSimulate;
+		vks::Buffer ssboStagingBuffer; //used for swapping alive list
 		vks::Buffer ssboCounter;
 
 		uint32_t EMIT_OFFSET = 0;
 		uint32_t SIMULATE_OFFSET = EMIT_OFFSET+ 3 * 4;
+		uint32_t DRAW_OFFSET = SIMULATE_OFFSET + 3 * 4;
 		
 		vks::Buffer ssboIndirect;
 		void Destroy()
 		{
 			ssboIndirect.destroy();
 			ssboCounter.destroy();
+			ssboStagingBuffer.destroy();
 			ssboAliveListAfterSimulate.destroy();
 			ssboAliveList.destroy();
 			ssboDeadList.destroy();
@@ -175,9 +178,9 @@ public:
 		}
 	} m_SSBOs;
 	
-	uint32_t m_discriptor_count = 4;
+	uint32_t m_discriptor_count = 5;
 	// Resources for the compute particle simulation
-	struct SComputeUpdateCounter {
+	struct SComputeUpdateCounterBegin {
 		VkDescriptorSetLayout descriptorSetLayout;	// shader binding layout
 		VkDescriptorSet descriptorSet;				// shader bindings
 		VkPipelineLayout pipelineLayout;			// Layout of pipeline
@@ -188,7 +191,7 @@ public:
 			vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
 			vkDestroyDescriptorSetLayout(device, descriptorSetLayout, nullptr);
 		}
-	} m_updater_binding;
+	} m_updater_begin_binding;
 	// Resources for the compute particle simulation
 	struct SComputeEmission {
 		struct SEmitterParam {					// Compute shader uniform block object
@@ -234,6 +237,18 @@ public:
 			uboAttractor.destroy();
 		}
 	} m_simulation_binding;
+	struct SComputeUpdateCounterEnd {
+		VkDescriptorSetLayout descriptorSetLayout;	// shader binding layout
+		VkDescriptorSet descriptorSet;				// shader bindings
+		VkPipelineLayout pipelineLayout;			// Layout of pipeline
+		VkPipeline pipeline;						// Compute pipeline
+		void Destroy(VkDevice device)
+		{
+			vkDestroyPipeline(device, pipeline, nullptr);
+			vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
+			vkDestroyDescriptorSetLayout(device, descriptorSetLayout, nullptr);
+		}
+	} m_updater_end_binding;
 	
 	// Resources for the graphics part of the example
 	struct SGraphicComposition {
@@ -284,9 +299,10 @@ public:
 
 	~VulkanExample()
 	{
-		m_updater_binding.Destroy(device);
+		m_updater_begin_binding.Destroy(device);
 		m_emission_binding.Destroy(device);
 		m_simulation_binding.Destroy(device);
+		m_updater_end_binding.Destroy(device);
 		m_composition_binding.Destroy(device);
 
 		// Compute
@@ -316,7 +332,7 @@ public:
 		VK_CHECK_RESULT(vkCreateDescriptorPool(device, &descriptorPoolInfo, nullptr, &descriptorPool));
 	}
 
-	void BuildComputeUpdateCounter()
+	void BuildComputeUpdateCounterBegin()
 	{
 		std::vector<VkDescriptorSetLayoutBinding> setLayoutBindings = {
 			// Emitter Uniform buffer
@@ -327,26 +343,26 @@ public:
 			vks::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_SHADER_STAGE_COMPUTE_BIT, 2),
 		};
 		VkDescriptorSetLayoutCreateInfo descriptorLayout = vks::initializers::descriptorSetLayoutCreateInfo(setLayoutBindings);
-		VK_CHECK_RESULT(vkCreateDescriptorSetLayout(device, &descriptorLayout, nullptr, &m_updater_binding.descriptorSetLayout));
+		VK_CHECK_RESULT(vkCreateDescriptorSetLayout(device, &descriptorLayout, nullptr, &m_updater_begin_binding.descriptorSetLayout));
 
-		VkPipelineLayoutCreateInfo pipelineLayoutCreateInfo = vks::initializers::pipelineLayoutCreateInfo(&m_updater_binding.descriptorSetLayout, 1);
-		VK_CHECK_RESULT(vkCreatePipelineLayout(device, &pipelineLayoutCreateInfo, nullptr, &m_updater_binding.pipelineLayout));
+		VkPipelineLayoutCreateInfo pipelineLayoutCreateInfo = vks::initializers::pipelineLayoutCreateInfo(&m_updater_begin_binding.descriptorSetLayout, 1);
+		VK_CHECK_RESULT(vkCreatePipelineLayout(device, &pipelineLayoutCreateInfo, nullptr, &m_updater_begin_binding.pipelineLayout));
 
-		VkDescriptorSetAllocateInfo allocInfo = vks::initializers::descriptorSetAllocateInfo(descriptorPool, &m_updater_binding.descriptorSetLayout, 1);
-		VK_CHECK_RESULT(vkAllocateDescriptorSets(device, &allocInfo, &m_updater_binding.descriptorSet));
+		VkDescriptorSetAllocateInfo allocInfo = vks::initializers::descriptorSetAllocateInfo(descriptorPool, &m_updater_begin_binding.descriptorSetLayout, 1);
+		VK_CHECK_RESULT(vkAllocateDescriptorSets(device, &allocInfo, &m_updater_begin_binding.descriptorSet));
 
 		std::vector<VkWriteDescriptorSet> writeDescriptorSets = {
 			// same as setLayoutBindings
-			vks::initializers::writeDescriptorSet(m_updater_binding.descriptorSet, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 0, &m_UBOs.uboEmitter.descriptor),
-			vks::initializers::writeDescriptorSet(m_updater_binding.descriptorSet, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, &m_SSBOs.ssboCounter.descriptor),
-			vks::initializers::writeDescriptorSet(m_updater_binding.descriptorSet, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 2, &m_SSBOs.ssboIndirect.descriptor),
+			vks::initializers::writeDescriptorSet(m_updater_begin_binding.descriptorSet, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 0, &m_UBOs.uboEmitter.descriptor),
+			vks::initializers::writeDescriptorSet(m_updater_begin_binding.descriptorSet, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, &m_SSBOs.ssboCounter.descriptor),
+			vks::initializers::writeDescriptorSet(m_updater_begin_binding.descriptorSet, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 2, &m_SSBOs.ssboIndirect.descriptor),
 		};
 		vkUpdateDescriptorSets(device, static_cast<uint32_t>(writeDescriptorSets.size()), writeDescriptorSets.data(), 0, NULL);
 
 		// Create pipeline
-		VkComputePipelineCreateInfo pipelineCreateInfo = vks::initializers::computePipelineCreateInfo(m_updater_binding.pipelineLayout, 0);
-		pipelineCreateInfo.stage = loadShader(getAssetPath() + "shaders/aparticlesystem/update_counter.comp.spv", VK_SHADER_STAGE_COMPUTE_BIT);
-		VK_CHECK_RESULT(vkCreateComputePipelines(device, pipelineCache, 1, &pipelineCreateInfo, nullptr, &m_updater_binding.pipeline));
+		VkComputePipelineCreateInfo pipelineCreateInfo = vks::initializers::computePipelineCreateInfo(m_updater_begin_binding.pipelineLayout, 0);
+		pipelineCreateInfo.stage = loadShader(getAssetPath() + "shaders/aparticlesystem/update_counter_begin.comp.spv", VK_SHADER_STAGE_COMPUTE_BIT);
+		VK_CHECK_RESULT(vkCreateComputePipelines(device, pipelineCache, 1, &pipelineCreateInfo, nullptr, &m_updater_begin_binding.pipeline));
 	}
 	
 	void BuildComputeEmission()
@@ -403,8 +419,16 @@ public:
 		std::vector<VkDescriptorSetLayoutBinding> setLayoutBindings = {
 			//Uniform buffer
 			vks::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_COMPUTE_BIT, 0),
-			//Particle storage buffer
+			// Particle shader storage buffer
 			vks::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_SHADER_STAGE_COMPUTE_BIT, 1),
+			// dead list shader storage buffer
+			vks::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_SHADER_STAGE_COMPUTE_BIT, 2),
+			// alive list shader storage buffer
+			vks::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_SHADER_STAGE_COMPUTE_BIT, 3),
+			// alive list after simulate shader storage buffer
+			vks::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_SHADER_STAGE_COMPUTE_BIT, 4),
+			// counter shader storage buffer
+			vks::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_SHADER_STAGE_COMPUTE_BIT, 5),
 		};
 		VkDescriptorSetLayoutCreateInfo descriptorLayout = vks::initializers::descriptorSetLayoutCreateInfo(setLayoutBindings);
 		VK_CHECK_RESULT(vkCreateDescriptorSetLayout(device, &descriptorLayout, nullptr, &m_simulation_binding.descriptorSetLayout));
@@ -416,10 +440,14 @@ public:
 		VK_CHECK_RESULT(vkAllocateDescriptorSets(device, &allocInfo, &m_simulation_binding.descriptorSet));
 
 		std::vector<VkWriteDescriptorSet> writeDescriptorSets = {
-			// Uniform buffer
+			// same as setLayoutBindings
 			vks::initializers::writeDescriptorSet(m_simulation_binding.descriptorSet, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 0, &m_simulation_binding.uboAttractor.descriptor),
 			// Particle storage buffer
 			vks::initializers::writeDescriptorSet(m_simulation_binding.descriptorSet, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, &m_SSBOs.ssboParticles.descriptor),
+			vks::initializers::writeDescriptorSet(m_simulation_binding.descriptorSet, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 2, &m_SSBOs.ssboDeadList.descriptor),
+			vks::initializers::writeDescriptorSet(m_simulation_binding.descriptorSet, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 3, &m_SSBOs.ssboAliveList.descriptor),
+			vks::initializers::writeDescriptorSet(m_simulation_binding.descriptorSet, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 4, &m_SSBOs.ssboAliveListAfterSimulate.descriptor),
+			vks::initializers::writeDescriptorSet(m_simulation_binding.descriptorSet, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 5, &m_SSBOs.ssboCounter.descriptor),
 		};
 		vkUpdateDescriptorSets(device, static_cast<uint32_t>(writeDescriptorSets.size()), writeDescriptorSets.data(), 0, NULL);
 
@@ -427,6 +455,39 @@ public:
 		VkComputePipelineCreateInfo pipelineCreateInfo = vks::initializers::computePipelineCreateInfo(m_simulation_binding.pipelineLayout, 0);
 		pipelineCreateInfo.stage = loadShader(getAssetPath() + "shaders/aparticlesystem/particle_simulate.comp.spv", VK_SHADER_STAGE_COMPUTE_BIT);
 		VK_CHECK_RESULT(vkCreateComputePipelines(device, pipelineCache, 1, &pipelineCreateInfo, nullptr, &m_simulation_binding.pipeline));
+	}
+
+	void BuildComputeUpdateCounterEnd()
+	{
+		std::vector<VkDescriptorSetLayoutBinding> setLayoutBindings = {
+			// Emitter Uniform buffer
+			vks::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_COMPUTE_BIT, 0),
+			// counter shader storage buffer
+			vks::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_SHADER_STAGE_COMPUTE_BIT, 1),
+			// indirect buffer
+			vks::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_SHADER_STAGE_COMPUTE_BIT, 2),
+		};
+		VkDescriptorSetLayoutCreateInfo descriptorLayout = vks::initializers::descriptorSetLayoutCreateInfo(setLayoutBindings);
+		VK_CHECK_RESULT(vkCreateDescriptorSetLayout(device, &descriptorLayout, nullptr, &m_updater_end_binding.descriptorSetLayout));
+
+		VkPipelineLayoutCreateInfo pipelineLayoutCreateInfo = vks::initializers::pipelineLayoutCreateInfo(&m_updater_end_binding.descriptorSetLayout, 1);
+		VK_CHECK_RESULT(vkCreatePipelineLayout(device, &pipelineLayoutCreateInfo, nullptr, &m_updater_end_binding.pipelineLayout));
+
+		VkDescriptorSetAllocateInfo allocInfo = vks::initializers::descriptorSetAllocateInfo(descriptorPool, &m_updater_end_binding.descriptorSetLayout, 1);
+		VK_CHECK_RESULT(vkAllocateDescriptorSets(device, &allocInfo, &m_updater_end_binding.descriptorSet));
+
+		std::vector<VkWriteDescriptorSet> writeDescriptorSets = {
+			// same as setLayoutBindings
+			vks::initializers::writeDescriptorSet(m_updater_end_binding.descriptorSet, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 0, &m_UBOs.uboEmitter.descriptor),
+			vks::initializers::writeDescriptorSet(m_updater_end_binding.descriptorSet, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, &m_SSBOs.ssboCounter.descriptor),
+			vks::initializers::writeDescriptorSet(m_updater_end_binding.descriptorSet, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 2, &m_SSBOs.ssboIndirect.descriptor),
+		};
+		vkUpdateDescriptorSets(device, static_cast<uint32_t>(writeDescriptorSets.size()), writeDescriptorSets.data(), 0, NULL);
+
+		// Create pipeline
+		VkComputePipelineCreateInfo pipelineCreateInfo = vks::initializers::computePipelineCreateInfo(m_updater_end_binding.pipelineLayout, 0);
+		pipelineCreateInfo.stage = loadShader(getAssetPath() + "shaders/aparticlesystem/update_counter_end.comp.spv", VK_SHADER_STAGE_COMPUTE_BIT);
+		VK_CHECK_RESULT(vkCreateComputePipelines(device, pipelineCache, 1, &pipelineCreateInfo, nullptr, &m_updater_end_binding.pipeline));
 	}
 	
 	void BuildGraphicComposition()
@@ -598,8 +659,13 @@ public:
 
 			VkDeviceSize offsets[1] = { 0 };
 			vkCmdBindVertexBuffers(drawCmdBuffers[i], VERTEX_BUFFER_BIND_ID, 1, &m_SSBOs.ssboParticles.buffer, offsets);
-			vkCmdDraw(drawCmdBuffers[i], m_particles.GetParticleCount(), 1, 0, 0);
-
+			vkCmdBindIndexBuffer(drawCmdBuffers[i], m_SSBOs.ssboAliveListAfterSimulate.buffer, 0, VK_INDEX_TYPE_UINT32);
+			// If the multi draw feature is supported:
+			// One draw call for an arbitrary number of ojects
+			// Index offsets and instance count are taken from the indirect buffer
+			vkCmdDrawIndexedIndirect(drawCmdBuffers[i], m_SSBOs.ssboIndirect.buffer, m_SSBOs.DRAW_OFFSET, 1, 4*4);
+			//vkCmdDraw(drawCmdBuffers[i], m_particles.GetParticleCount(), 1, 0, 0);
+			
 			drawUI(drawCmdBuffers[i]);
 
 			vkCmdEndRenderPass(drawCmdBuffers[i]);
@@ -614,28 +680,28 @@ public:
 
 		VK_CHECK_RESULT(vkBeginCommandBuffer(compute.commandBuffer, &cmdBufInfo));
 
-		{// Add memory barrier to ensure that the (graphics) indirect commad has fetched attributes before compute starts to write to the buffer
-			VkBufferMemoryBarrier bufferBarrier = vks::initializers::bufferMemoryBarrier();
-			bufferBarrier.buffer = m_SSBOs.ssboIndirect.buffer;
-			bufferBarrier.size = m_SSBOs.ssboIndirect.descriptor.range;
-			bufferBarrier.srcAccessMask = VK_ACCESS_INDIRECT_COMMAND_READ_BIT;						// Vertex shader invocations have finished reading from the buffer
-			bufferBarrier.dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;								// Compute shader wants to write to the buffer
-			// Compute and graphics queue may have different queue families (see VulkanDevice::createLogicalDevice)
-			// For the barrier to work across different queues, we need to set their family indices
-			bufferBarrier.srcQueueFamilyIndex = vulkanDevice->queueFamilyIndices.graphics;			// Required as compute and graphics queue may have different families
-			bufferBarrier.dstQueueFamilyIndex = vulkanDevice->queueFamilyIndices.compute;			// Required as compute and graphics queue may have different families
-			vkCmdPipelineBarrier(
-				compute.commandBuffer,
-				VK_PIPELINE_STAGE_VERTEX_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-				VK_FLAGS_NONE,
-				0, nullptr,
-				1, &bufferBarrier,
-				0, nullptr);
-		}
+		//{// Add memory barrier to ensure that the (graphics) indirect commad has fetched attributes before compute starts to write to the buffer
+		//	VkBufferMemoryBarrier bufferBarrier = vks::initializers::bufferMemoryBarrier();
+		//	bufferBarrier.buffer = m_SSBOs.ssboIndirect.buffer;
+		//	bufferBarrier.size = m_SSBOs.ssboIndirect.descriptor.range;
+		//	bufferBarrier.srcAccessMask = VK_ACCESS_INDIRECT_COMMAND_READ_BIT;						// Vertex shader invocations have finished reading from the buffer
+		//	bufferBarrier.dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;								// Compute shader wants to write to the buffer
+		//	// Compute and graphics queue may have different queue families (see VulkanDevice::createLogicalDevice)
+		//	// For the barrier to work across different queues, we need to set their family indices
+		//	bufferBarrier.srcQueueFamilyIndex = vulkanDevice->queueFamilyIndices.graphics;			// Required as compute and graphics queue may have different families
+		//	bufferBarrier.dstQueueFamilyIndex = vulkanDevice->queueFamilyIndices.compute;			// Required as compute and graphics queue may have different families
+		//	vkCmdPipelineBarrier(
+		//		compute.commandBuffer,
+		//		VK_PIPELINE_STAGE_VERTEX_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+		//		VK_FLAGS_NONE,
+		//		0, nullptr,
+		//		1, &bufferBarrier,
+		//		0, nullptr);
+		//}
 		//update counter
 		{
-			vkCmdBindPipeline(compute.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, m_updater_binding.pipeline);
-			vkCmdBindDescriptorSets(compute.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, m_updater_binding.pipelineLayout, 0, 1, &m_updater_binding.descriptorSet, 0, 0);
+			vkCmdBindPipeline(compute.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, m_updater_begin_binding.pipeline);
+			vkCmdBindDescriptorSets(compute.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, m_updater_begin_binding.pipelineLayout, 0, 1, &m_updater_begin_binding.descriptorSet, 0, 0);
 			vkCmdDispatch(compute.commandBuffer,1, 1, 1);
 		}
 		{// Add memory barrier to ensure that compute shader has finished writing to the buffer
@@ -704,15 +770,22 @@ public:
 		{
 			vkCmdBindPipeline(compute.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, m_simulation_binding.pipeline);
 			vkCmdBindDescriptorSets(compute.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, m_simulation_binding.pipelineLayout, 0, 1, &m_simulation_binding.descriptorSet, 0, 0);
-			vkCmdDispatch(compute.commandBuffer, (m_particles.GetMaxParticleCount() + 255) / 256, 1, 1);
+			//vkCmdDispatch(compute.commandBuffer, (m_particles.GetMaxParticleCount() + 255) / 256, 1, 1);
+			vkCmdDispatchIndirect(compute.commandBuffer, m_SSBOs.ssboIndirect.buffer, m_SSBOs.SIMULATE_OFFSET);
+		}
+		//update counter
+		{
+			vkCmdBindPipeline(compute.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, m_updater_end_binding.pipeline);
+			vkCmdBindDescriptorSets(compute.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, m_updater_end_binding.pipelineLayout, 0, 1, &m_updater_end_binding.descriptorSet, 0, 0);
+			vkCmdDispatch(compute.commandBuffer, 1, 1, 1);
 		}
 		{// Add memory barrier to ensure that compute shader has finished writing to the buffer
 		// Without this the (rendering) vertex shader may display incomplete results (partial data from last frame)
 			VkBufferMemoryBarrier bufferBarrier = vks::initializers::bufferMemoryBarrier();
-			bufferBarrier.buffer = m_SSBOs.ssboParticles.buffer;
-			bufferBarrier.size = m_SSBOs.ssboParticles.descriptor.range;
+			bufferBarrier.buffer = m_SSBOs.ssboIndirect.buffer;
+			bufferBarrier.size = m_SSBOs.ssboIndirect.descriptor.range;
 			bufferBarrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;								// Compute shader has finished writes to the buffer
-			bufferBarrier.dstAccessMask = VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT;						// Vertex shader invocations want to read from the buffer
+			bufferBarrier.dstAccessMask = VK_ACCESS_INDIRECT_COMMAND_READ_BIT;						// Vertex shader invocations want to read from the buffer
 			// Compute and graphics queue may have different queue families (see VulkanDevice::createLogicalDevice)
 			// For the barrier to work across different queues, we need to set their family indices
 			bufferBarrier.srcQueueFamilyIndex = vulkanDevice->queueFamilyIndices.compute;			// Required as compute and graphics queue may have different families
@@ -745,18 +818,18 @@ public:
 	{
 		//Particle buffer
 		{
-			std::default_random_engine rndEngine(benchmark.active ? 0 : (unsigned)time(nullptr));
-			std::uniform_real_distribution<float> rndDist(-1.0f, 1.0f);
+			//std::default_random_engine rndEngine(benchmark.active ? 0 : (unsigned)time(nullptr));
+			//std::uniform_real_distribution<float> rndDist(-1.0f, 1.0f);
 
-			// Initial particle positions
-			std::vector<SSBOs::SParticle> particleBuffer(m_particles.GetMaxParticleCount());
-			for (auto& particle : particleBuffer) {
-				particle.pos = glm::vec3(rndDist(rndEngine), rndDist(rndEngine),0.0f);
-				particle.vel = glm::vec3(0.0f);
-				particle.gradientPos.x = particle.pos.x / 2.0f;
-			}
-			
+			//// Initial particle positions
 			//std::vector<SSBOs::SParticle> particleBuffer(m_particles.GetMaxParticleCount());
+			//for (auto& particle : particleBuffer) {
+			//	particle.pos = glm::vec3(rndDist(rndEngine), rndDist(rndEngine),0.0f);
+			//	particle.vel = glm::vec3(0.0f);
+			//	particle.gradientPos.x = particle.pos.x / 2.0f;
+			//}
+			
+			std::vector<SSBOs::SParticle> particleBuffer(m_particles.GetMaxParticleCount());
 			
 			// Staging
 			// SSBO won't be changed on the host after upload so copy to device local memory
@@ -805,7 +878,7 @@ public:
 
 			vulkanDevice->createBuffer(
 				// The SSBO will be used as a storage buffer for the compute pipeline and as a vertex buffer in the graphics pipeline
-				VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+				VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
 				VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
 				&m_SSBOs.ssboDeadList,
 				storageBufferSize);
@@ -822,61 +895,39 @@ public:
 		{
 			std::vector<uint32_t> alive_list(m_particles.GetMaxParticleCount());
 
-			// Staging
 			// SSBO won't be changed on the host after upload so copy to device local memory
-			vks::Buffer stagingBuffer;
 			VkDeviceSize storageBufferSize = alive_list.size() * sizeof(uint32_t);
 			vulkanDevice->createBuffer(
-				VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-				VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-				&stagingBuffer,
-				storageBufferSize,
-				alive_list.data());
-
-			vulkanDevice->createBuffer(
 				// The SSBO will be used as a storage buffer for the compute pipeline and as a vertex buffer in the graphics pipeline
-				VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+				VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
 				VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
 				&m_SSBOs.ssboAliveList,
 				storageBufferSize);
-
-			// Copy to staging buffer
-			VkCommandBuffer copyCmd = VulkanExampleBase::createCommandBuffer(VK_COMMAND_BUFFER_LEVEL_PRIMARY, true);
-			VkBufferCopy copyRegion = {};
-			copyRegion.size = storageBufferSize;
-			vkCmdCopyBuffer(copyCmd, stagingBuffer.buffer, m_SSBOs.ssboAliveList.buffer, 1, &copyRegion);
-			VulkanExampleBase::flushCommandBuffer(copyCmd, queue, true);
-			stagingBuffer.destroy();
 		}
 		// alive list after simulate
 		{
 			std::vector<uint32_t> alive_list_after_simulate(m_particles.GetMaxParticleCount());
 
-			// Staging
 			// SSBO won't be changed on the host after upload so copy to device local memory
-			vks::Buffer stagingBuffer;
 			VkDeviceSize storageBufferSize = alive_list_after_simulate.size() * sizeof(uint32_t);
 			vulkanDevice->createBuffer(
-				VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-				VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-				&stagingBuffer,
-				storageBufferSize,
-				alive_list_after_simulate.data());
-
-			vulkanDevice->createBuffer(
 				// The SSBO will be used as a storage buffer for the compute pipeline and as a vertex buffer in the graphics pipeline
-				VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+				VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
 				VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
 				&m_SSBOs.ssboAliveListAfterSimulate,
 				storageBufferSize);
+		}
+		//staging buffer
+		{
+			std::vector<uint32_t> list(m_particles.GetMaxParticleCount());
 
-			// Copy to staging buffer
-			VkCommandBuffer copyCmd = VulkanExampleBase::createCommandBuffer(VK_COMMAND_BUFFER_LEVEL_PRIMARY, true);
-			VkBufferCopy copyRegion = {};
-			copyRegion.size = storageBufferSize;
-			vkCmdCopyBuffer(copyCmd, stagingBuffer.buffer, m_SSBOs.ssboAliveListAfterSimulate.buffer, 1, &copyRegion);
-			VulkanExampleBase::flushCommandBuffer(copyCmd, queue, true);
-			stagingBuffer.destroy();
+			// SSBO won't be changed on the host after upload so copy to device local memory
+			VkDeviceSize storageBufferSize = list.size() * sizeof(uint32_t);
+			vulkanDevice->createBuffer(
+				VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+				VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+				&m_SSBOs.ssboStagingBuffer,
+				storageBufferSize);
 		}
 		// counter
 		{
@@ -899,7 +950,7 @@ public:
 
 			vulkanDevice->createBuffer(
 				// The SSBO will be used as a storage buffer for the compute pipeline and as a vertex buffer in the graphics pipeline
-				VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+				VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
 				VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
 				&m_SSBOs.ssboCounter,
 				storageBufferSize);
@@ -918,10 +969,9 @@ public:
 			{
 				glm::u32vec3 dispatchEmit;
 				glm::u32vec3 dispatchSimulate;
-				glm::u32vec3 dispatchDraw;
+				glm::u32vec4 dispatchDraw;
 				float padding0;
 				float padding1;
-				float padding2;
 			};
 
 			VkDeviceSize storageBufferSize = sizeof(SIndirectParam);
@@ -937,6 +987,9 @@ public:
 	void UpdateUBOEmitter()
 	{
 		m_UBOs.emitterParams.emitCount = m_particles.GetEmitParticleCount();
+		m_UBOs.emitterParams.particleLifeMax = m_particles.GetEmitParticleLifeMax();
+		m_UBOs.emitterParams.randomSeed = frameTimer;
+		std::cout << m_UBOs.emitterParams.emitCount << std::endl;
 
 		// Map for host access
 		VK_CHECK_RESULT(m_UBOs.uboEmitter.map());
@@ -946,7 +999,7 @@ public:
 	
 	void UpdateUniformBufferAttractor()
 	{
-		m_simulation_binding.attractorParams.deltaT = frameTimer * 2.5f;
+		m_simulation_binding.attractorParams.deltaT = frameTimer*1000;
 		if (m_animate)
 		{
 			m_simulation_binding.attractorParams.destX = sin(glm::radians(timer * 360.0f)) * 0.75f;
@@ -989,6 +1042,16 @@ public:
 		//std::cout << frameTimer << std::endl;
 		m_particles.Update(frameTimer);
 		UpdateUBO();
+
+		// Swap CURRENT alivelist with NEW alivelist
+		// Copy to staging buffer
+		VkCommandBuffer copyCmd = VulkanExampleBase::createCommandBuffer(VK_COMMAND_BUFFER_LEVEL_PRIMARY, true);
+		VkBufferCopy copyRegion = {};
+		copyRegion.size = m_SSBOs.ssboStagingBuffer.size;
+		//vkCmdCopyBuffer(copyCmd, m_SSBOs.ssboAliveList.buffer, m_SSBOs.ssboStagingBuffer.buffer, 1, &copyRegion);
+		vkCmdCopyBuffer(copyCmd, m_SSBOs.ssboAliveListAfterSimulate.buffer, m_SSBOs.ssboAliveList.buffer, 1, &copyRegion);
+		//vkCmdCopyBuffer(copyCmd, m_SSBOs.ssboStagingBuffer.buffer, m_SSBOs.ssboAliveListAfterSimulate.buffer, 1, &copyRegion);
+		VulkanExampleBase::flushCommandBuffer(copyCmd, queue, true);
 	}
 	
 	void draw()
@@ -1022,9 +1085,10 @@ public:
 		BuildSSBOs();
 		
 		SetupDescriptorPool();
-		BuildComputeUpdateCounter();
+		BuildComputeUpdateCounterBegin();
 		BuildComputeEmission();
 		BuildComputeSimulation();
+		BuildComputeUpdateCounterEnd();
 		BuildGraphicComposition();
 
 		UpdateUBO();

@@ -4,37 +4,37 @@
 struct Particle
 {
 	vec3 pos;
-    float padding0;
+    float lifeMax;
 	vec3 vel;
-    float padding1;
+    float life;
 	vec4 gradientUV;
 };
 
 layout (binding = 0) uniform UBOEmitter
 {
 	uint emitCount;
-	float padding0;
-	float padding1;
-	int padding2;
-} uEmitter;
+	uint particleLifeMax;
+	float randomSeed;
+	float padding2;
+} uboEmitter;
 
 //Particle storage buffer
 layout(std140, binding = 1) buffer SSBOParticle 
 {
     Particle particles[ ];
-};
+}ssboParticle;
 layout(std140, binding = 2) buffer SSBODead
 {
-    uint dead_list[ ];
-};
+    uint list[ ];
+}ssboDead;
 layout(std140, binding = 3) buffer SSBOAlive
 {
-    uint alive_list[ ];
-};
+    uint list[ ];
+}ssboAlive;
 layout(std140, binding = 4) buffer SSBOAliveAfterSimulate
 {
-    uint alive_list_after_simulate[ ];
-};
+    uint list[ ];
+}ssboAliveAfterSimulate;
 layout(std140, binding = 5) buffer SSBOCounter
 {
     uint emitCount;
@@ -42,6 +42,8 @@ layout(std140, binding = 5) buffer SSBOCounter
     uint aliveCount;
     uint aliveCountAfterSimulate;
 }ssboCounter;
+
+float rand(vec2 co){return fract(sin(dot(co.xy ,vec2(12.9898,78.233))) * 43758.5453);}
 
 layout (local_size_x = 256) in;
 void main() 
@@ -53,15 +55,20 @@ void main()
 
     // new particle index retrieved from dead list (pop):
     uint dead_count = atomicAdd(ssboCounter.deadCount,-1);
-    uint newParticleIndex = dead_list[dead_count-1];
+    uint newParticleIndex = ssboDead.list[dead_count-1];
 
     // create new particle
-    particles[newParticleIndex].pos = vec3(0,0,0);
-    particles[newParticleIndex].vel = vec3(0,0,0);
-	particles[newParticleIndex].gradientUV = vec4(0,0,0,0);
+    ssboParticle.particles[newParticleIndex].pos = vec3(
+        rand(vec2(uboEmitter.randomSeed,float(index/256))),
+        rand(vec2(uboEmitter.randomSeed+0.123251,float(index/256)+0.054385)),
+        rand(vec2(uboEmitter.randomSeed+0.043155,float(index/256)+0.081238)));
+    ssboParticle.particles[newParticleIndex].vel = vec3(0,0,0);
+    ssboParticle.particles[newParticleIndex].lifeMax = uboEmitter.particleLifeMax;
+    ssboParticle.particles[newParticleIndex].life = uboEmitter.particleLifeMax;
+	ssboParticle.particles[newParticleIndex].gradientUV = vec4(0,0,0,0);
 
     // and add index to the alive list (push):
     uint alive_count = atomicAdd(ssboCounter.aliveCount,1);
-    alive_list[alive_count]=newParticleIndex;
+    ssboAlive.list[alive_count]=newParticleIndex;
 }
 
