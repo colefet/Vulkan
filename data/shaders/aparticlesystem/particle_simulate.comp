@@ -1,6 +1,6 @@
 #version 450
 
-//todo:common.h
+//common.h
 struct Particle
 {
 	vec3 pos;
@@ -9,6 +9,29 @@ struct Particle
     float life;
 	vec4 gradientUV;
 };
+void SetVec4Element(inout uvec4 vec, uint mod_value, uint value) {
+    if(mod_value==0){
+        vec.x = value;
+    }else if(mod_value==1){
+        vec.y = value;
+    }else if(mod_value==2){
+        vec.z = value;
+    }else if(mod_value==3){
+        vec.w = value;
+    }
+}
+
+uint GetVec4Element(uvec4 vec, uint mod_value) {
+    if(mod_value==0){
+        return vec.x;
+    }else if(mod_value==1){
+        return vec.y;
+    }else if(mod_value==2){
+        return vec.z;
+    }else if(mod_value==3){
+        return vec.w;
+    }
+}
 
 
 layout (binding = 0) uniform UBOSimulate
@@ -26,15 +49,15 @@ layout(std140, binding = 1) buffer SSBOParticle
 }ssboParticle;
 layout(std140, binding = 2) buffer SSBODead
 {
-    uint list[ ];
+    uvec4 list[ ];
 }ssboDead;
 layout(std140, binding = 3) buffer SSBOAlive
 {
-    uint list[ ];
+    uvec4 list[ ];
 }ssboAlive;
 layout(std140, binding = 4) buffer SSBOAliveAfterSimulate
 {
-    uint list[ ];
+    uvec4 list[ ];
 }ssboAliveAfterSimulate;
 layout(std140, binding = 5) buffer SSBOCounter
 {
@@ -74,9 +97,17 @@ void main()
 	//const float dt = xEmitterFixedTimestep >= 0 ? xEmitterFixedTimestep : g_xFrame_DeltaTime;
     const float dt = uboSimulate.deltaT;
 
+    uint particleIndex= 0;
     // Read position and velocity
-    uint particleIndex = ssboAlive.list[index];
+    {//uint particleIndex = ssboAlive.list[index];
+        uint alive_index = index;
+        uint div_value = alive_index/4;
+        uint mod_value = uint(mod(alive_index,4));
+        particleIndex = GetVec4Element(ssboAlive.list[div_value],mod_value);
+    }
+    
     if(ssboParticle.particles[particleIndex].life > 0){
+    //if(true){
         /*vec2 vVel = ssboParticle.particles[particleIndex].vel.xy;
         vec2 vPos = ssboParticle.particles[particleIndex].pos.xy;
 
@@ -107,13 +138,45 @@ void main()
 
         // add to new alive list:
         uint alive_count = atomicAdd(ssboCounter.aliveCountAfterSimulate,1);
-        ssboAliveAfterSimulate.list[alive_count]=particleIndex;
+        {//ssboAliveAfterSimulate.list[alive_count]=particleIndex;
+            uint alive_index = alive_count;
+            uint div_value = alive_index/4;
+            uint mod_value = uint(mod(alive_index,4));
+            //SetVec4Element(ssboAliveAfterSimulate.list[div_value],mod_value,particleIndex);
+            //这段SetVec4提取成函数有bug，不管怎么尝试vec4中4个元素最终都只有一个有效元素，应该是数据存取规则没摸清楚
+            uint value = particleIndex;
+            if(mod_value==0){
+                ssboAliveAfterSimulate.list[div_value].x = value;
+            }else if(mod_value==1){
+                ssboAliveAfterSimulate.list[div_value].y = value;
+            }else if(mod_value==2){
+                ssboAliveAfterSimulate.list[div_value].z = value;
+            }else if(mod_value==3){
+                ssboAliveAfterSimulate.list[div_value].w = value;
+            }
+        }
 
     }
     else{
         // add to dead list:
         uint dead_count = atomicAdd(ssboCounter.deadCount,1);
-        ssboDead.list[dead_count]=particleIndex;
+        {//ssboDead.list[dead_count]=particleIndex;
+            uint dead_index = dead_count;
+            uint div_value = dead_index/4;
+            uint mod_value = uint(mod(dead_index,4));
+            //SetVec4Element(ssboDead.list[div_value],mod_value,particleIndex);
+            //这段SetVec4提取成函数有bug，不管怎么尝试vec4中4个元素最终都只有一个有效元素，应该是数据存取规则没摸清楚
+            uint value = particleIndex;
+            if(mod_value==0){
+                ssboDead.list[div_value].x = value;
+            }else if(mod_value==1){
+                ssboDead.list[div_value].y = value;
+            }else if(mod_value==2){
+                ssboDead.list[div_value].z = value;
+            }else if(mod_value==3){
+                ssboDead.list[div_value].w = value;
+            }
+        }
     }
     
 }

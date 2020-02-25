@@ -21,10 +21,10 @@ layout(std140, binding = 1) buffer SSBOCounter
 layout(std140, binding = 2) buffer SSBOIndirect
 {
     uvec3 emitParam;
-    uvec3 simulateParam;
-    uvec4 drawParam;
     float padding0;
+    uvec3 simulateParam;
     float padding1;
+    uvec4 drawParam;
 }ssboIndirect;
 
 layout (local_size_x = 1) in;

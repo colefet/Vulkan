@@ -1,6 +1,6 @@
 #version 450
 
-//todo:common.h
+//common.h
 struct Particle
 {
 	vec3 pos;
@@ -9,6 +9,29 @@ struct Particle
     float life;
 	vec4 gradientUV;
 };
+void SetVec4Element(inout uvec4 vec, uint mod_value, uint value) {
+    if(mod_value==0){
+        vec.x = value;
+    }else if(mod_value==1){
+        vec.y = value;
+    }else if(mod_value==2){
+        vec.z = value;
+    }else if(mod_value==3){
+        vec.w = value;
+    }
+}
+
+uint GetVec4Element(uvec4 vec, uint mod_value) {
+    if(mod_value==0){
+        return vec.x;
+    }else if(mod_value==1){
+        return vec.y;
+    }else if(mod_value==2){
+        return vec.z;
+    }else if(mod_value==3){
+        return vec.w;
+    }
+}
 
 layout (binding = 0) uniform UBOEmitter
 {
@@ -25,15 +48,15 @@ layout(std140, binding = 1) buffer SSBOParticle
 }ssboParticle;
 layout(std140, binding = 2) buffer SSBODead
 {
-    uint list[ ];
+    uvec4 list[ ];
 }ssboDead;
 layout(std140, binding = 3) buffer SSBOAlive
 {
-    uint list[ ];
+    uvec4 list[ ];
 }ssboAlive;
 layout(std140, binding = 4) buffer SSBOAliveAfterSimulate
 {
-    uint list[ ];
+    uvec4 list[ ];
 }ssboAliveAfterSimulate;
 layout(std140, binding = 5) buffer SSBOCounter
 {
@@ -55,20 +78,40 @@ void main()
 
     // new particle index retrieved from dead list (pop):
     uint dead_count = atomicAdd(ssboCounter.deadCount,-1);
-    uint newParticleIndex = ssboDead.list[dead_count-1];
+    //uint newParticleIndex = ssboDead.list[dead_count-1];
+    uint dead_index = dead_count-1;
+    uint dead_div_value = dead_index/4;
+    uint dead_mod_value = uint(mod(dead_index,4));
+    uint newParticleIndex = GetVec4Element(ssboDead.list[dead_div_value],dead_mod_value);
 
     // create new particle
     ssboParticle.particles[newParticleIndex].pos = vec3(
-        rand(vec2(uboEmitter.randomSeed,float(index/256))),
-        rand(vec2(uboEmitter.randomSeed+0.123251,float(index/256)+0.054385)),
+        rand(vec2(uboEmitter.randomSeed,float(index/256)*2))*2-1,
+        rand(vec2(uboEmitter.randomSeed+0.123251,float(index/256)+0.054385))*2-1,
         rand(vec2(uboEmitter.randomSeed+0.043155,float(index/256)+0.081238)));
-    ssboParticle.particles[newParticleIndex].vel = vec3(0,0,0);
+    ssboParticle.particles[newParticleIndex].vel = vec3(newParticleIndex,dead_count-1,0);
     ssboParticle.particles[newParticleIndex].lifeMax = uboEmitter.particleLifeMax;
     ssboParticle.particles[newParticleIndex].life = uboEmitter.particleLifeMax;
 	ssboParticle.particles[newParticleIndex].gradientUV = vec4(0,0,0,0);
 
     // and add index to the alive list (push):
     uint alive_count = atomicAdd(ssboCounter.aliveCount,1);
-    ssboAlive.list[alive_count]=newParticleIndex;
+    {//ssboAlive.list[alive_count]=newParticleIndex;
+        uint alive_index = alive_count;
+        uint div_value = alive_index/4;
+        uint mod_value = uint(mod(alive_index,4));
+        //SetVec4Element(ssboAlive.list[div_value],mod_value,newParticleIndex);
+        //这段SetVec4提取成函数有bug，不管怎么尝试vec4中4个元素最终都只有一个有效元素，应该是数据存取规则没摸清楚
+        uint value = newParticleIndex;
+        if(mod_value==0){
+            ssboAlive.list[div_value].x = value;
+        }else if(mod_value==1){
+            ssboAlive.list[div_value].y = value;
+        }else if(mod_value==2){
+            ssboAlive.list[div_value].z = value;
+        }else if(mod_value==3){
+            ssboAlive.list[div_value].w = value;
+        }
+    }
 }
 
