@@ -17,6 +17,7 @@
 #include <vulkan/vulkan.h>
 #include "vulkanexamplebase.h"
 #include "VulkanTexture.hpp"
+#include "VulkanModel.hpp"
 
 #define ENABLE_VALIDATION true
 
@@ -26,20 +27,6 @@
 #define MAX_PARTICLE_COUNT 128 * 1024
 #else
 #define MAX_PARTICLE_COUNT 256 * 1024
-#endif
-
-#if !(defined(VK_USE_PLATFORM_IOS_MVK) || defined(VK_USE_PLATFORM_MACOS_MVK))
-// iOS & macOS: VulkanExampleBase::getAssetPath() implemented externally to allow access to Objective-C components
-const std::string getAssetPath()
-{
-#if defined(VK_USE_PLATFORM_ANDROID_KHR)
-	return "";
-#elif defined(VK_EXAMPLE_DATA_DIR)
-	return VK_EXAMPLE_DATA_DIR;
-#else
-	return "./../data/";
-#endif
-}
 #endif
 
 class CParticle
@@ -114,6 +101,7 @@ private:
 class VulkanExample : public VulkanExampleBase
 {
 public:
+	vks::Model m_scene;
 	CParticleSystem m_particles;
 	float timer = 0.0f;
 	float animStart = 20.0f;
@@ -252,10 +240,17 @@ public:
 
 	// Resources for the graphics part of the example
 	struct SGraphicEnvironment {
+		struct SceneVertex {
+			glm::vec3 pos;
+			glm::vec2 uv;
+			glm::vec3 color;
+			glm::vec3 normal;
+		};
 		struct SSceneMatrices {
-			glm::mat4 model;
-			glm::mat4 view;
 			glm::mat4 projection;
+			glm::mat4 view;
+			glm::mat4 model;
+			glm::vec4 lightPos = glm::vec4(0.0f, 1.0f, 0.0f, 0.0f);
 		} sceneMatrices;
 		vks::Buffer uboSceneMatrices;
 		VkDescriptorSetLayout descriptorSetLayout;	// shader binding layout
@@ -308,11 +303,18 @@ public:
 		settings.overlay = true;
 
 		//setting camera
-		camera.type = Camera::CameraType::firstperson;
+		/*camera.type = Camera::CameraType::firstperson;
 		camera.movementSpeed = 5.0f;
-		camera.position = { 7.5f, -6.75f, 0.0f };
-		camera.setRotation(glm::vec3(5.0f, 90.0f, 0.0f));
-		camera.setPerspective(60.0f, (float)width / (float)height, 0.1f, 64.0f);
+		camera.position = {0.0f, 5.0f, -5.0f };
+		camera.setRotation(glm::vec3(0.0f, 0.0f, 0.0f));
+		camera.setPerspective(60.0f, (float)width / (float)height, 0.1f, 64.0f);*/
+		float zNear = 0.1f;
+		float zFar = 1024.0f;
+		camera.type = Camera::CameraType::lookat;
+		camera.setPerspective(45.0f, (float)width / (float)height, zNear, zFar);
+		camera.setRotation(glm::vec3(-20.5f, -673.0f, 0.0f));
+		camera.setPosition(glm::vec3(0.0f, 0.0f, -175.0f));
+		zoomSpeed = 10.0f;
 
 		//particle system start play
 		m_particles.Initial(frameTimer);
@@ -334,10 +336,19 @@ public:
 		m_textures.Destroy();
 		m_SSBOs.Destroy();
 		m_UBOs.Destroy();
+		m_scene.destroy();
 	}
-
+	
 	void LoadAssets()
 	{
+		vks::VertexLayout vertexLayout = vks::VertexLayout({
+			vks::VERTEX_COMPONENT_POSITION,
+			vks::VERTEX_COMPONENT_UV,
+			vks::VERTEX_COMPONENT_COLOR,
+			vks::VERTEX_COMPONENT_NORMAL,
+		});
+		m_scene.loadFromFile(getAssetPath() + "models/shadowscene_fire.dae", vertexLayout, 2.0f, vulkanDevice, queue);
+		
 		m_textures.particle.loadFromFile(getAssetPath() + m_particles.GetTex(), VK_FORMAT_R8G8B8A8_UNORM, vulkanDevice, queue);
 		m_textures.gradient.loadFromFile(getAssetPath() + m_particles.GetGradientTex(), VK_FORMAT_R8G8B8A8_UNORM, vulkanDevice, queue);
 	}
@@ -346,7 +357,7 @@ public:
 	{
 		std::vector<VkDescriptorPoolSize> poolSizes =
 		{
-			vks::initializers::descriptorPoolSize(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1+2),
+			vks::initializers::descriptorPoolSize(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1+2+1),
 			vks::initializers::descriptorPoolSize(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1+4),
 			vks::initializers::descriptorPoolSize(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2)
 		};
@@ -510,6 +521,102 @@ public:
 		VkComputePipelineCreateInfo pipelineCreateInfo = vks::initializers::computePipelineCreateInfo(m_updater_end_binding.pipelineLayout, 0);
 		pipelineCreateInfo.stage = loadShader(getAssetPath() + "shaders/aparticlesystem/update_counter_end.comp.spv", VK_SHADER_STAGE_COMPUTE_BIT);
 		VK_CHECK_RESULT(vkCreateComputePipelines(device, pipelineCache, 1, &pipelineCreateInfo, nullptr, &m_updater_end_binding.pipeline));
+	}
+
+	void BuildGraphicEnvironment()
+	{
+		// Scene matrices ubo
+		vulkanDevice->createBuffer(
+			VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+			VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+			&m_environment_binding.uboSceneMatrices,
+			sizeof(m_environment_binding.sceneMatrices));
+
+		std::vector<VkDescriptorSetLayoutBinding> setLayoutBindings = {
+			// Binding 0 : Vertex shader uniform buffer
+			vks::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_VERTEX_BIT, 0),
+			// Binding 1 : Fragment shader image sampler
+			//vks::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT, 1)
+		};
+		VkDescriptorSetLayoutCreateInfo descriptorLayout = vks::initializers::descriptorSetLayoutCreateInfo(setLayoutBindings);
+		VK_CHECK_RESULT(vkCreateDescriptorSetLayout(device, &descriptorLayout, nullptr, &m_environment_binding.descriptorSetLayout));
+
+		VkPipelineLayoutCreateInfo pipelineLayoutCreateInfo = vks::initializers::pipelineLayoutCreateInfo(&m_environment_binding.descriptorSetLayout, 1);
+		VK_CHECK_RESULT(vkCreatePipelineLayout(device, &pipelineLayoutCreateInfo, nullptr, &m_environment_binding.pipelineLayout));
+
+		VkDescriptorSetAllocateInfo allocInfo = vks::initializers::descriptorSetAllocateInfo(descriptorPool, &m_environment_binding.descriptorSetLayout, 1);
+		VK_CHECK_RESULT(vkAllocateDescriptorSets(device, &allocInfo, &m_environment_binding.descriptorSet));
+
+		std::vector<VkWriteDescriptorSet> writeDescriptorSets = {
+			// Binding 0 : Vertex shader uniform buffer
+			vks::initializers::writeDescriptorSet(m_environment_binding.descriptorSet, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 0, &m_environment_binding.uboSceneMatrices.descriptor),
+			// Binding 1 : Fragment shader shadow sampler
+			//vks::initializers::writeDescriptorSet(m_environment_binding.descriptorSet, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, &texDescriptor)
+		};
+		vkUpdateDescriptorSets(device, static_cast<uint32_t>(writeDescriptorSets.size()), writeDescriptorSets.data(), 0, NULL);
+
+		// Create Rendering pipeline
+		{
+			VkPipelineInputAssemblyStateCreateInfo inputAssemblyState = vks::initializers::pipelineInputAssemblyStateCreateInfo(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST, 0, VK_FALSE);
+			VkPipelineRasterizationStateCreateInfo rasterizationState = vks::initializers::pipelineRasterizationStateCreateInfo(VK_POLYGON_MODE_FILL, VK_CULL_MODE_BACK_BIT, VK_FRONT_FACE_CLOCKWISE, 0);
+			VkPipelineColorBlendAttachmentState blendAttachmentState = vks::initializers::pipelineColorBlendAttachmentState(0xf, VK_FALSE);
+			VkPipelineColorBlendStateCreateInfo colorBlendState = vks::initializers::pipelineColorBlendStateCreateInfo(1, &blendAttachmentState);
+			VkPipelineDepthStencilStateCreateInfo depthStencilState = vks::initializers::pipelineDepthStencilStateCreateInfo(VK_TRUE, VK_TRUE, VK_COMPARE_OP_LESS_OR_EQUAL);
+			VkPipelineViewportStateCreateInfo viewportState = vks::initializers::pipelineViewportStateCreateInfo(1, 1, 0);
+			VkPipelineMultisampleStateCreateInfo multisampleState = vks::initializers::pipelineMultisampleStateCreateInfo(VK_SAMPLE_COUNT_1_BIT, 0);
+			std::vector<VkDynamicState> dynamicStateEnables = { VK_DYNAMIC_STATE_VIEWPORT,VK_DYNAMIC_STATE_SCISSOR };
+			VkPipelineDynamicStateCreateInfo dynamicState = vks::initializers::pipelineDynamicStateCreateInfo(dynamicStateEnables);
+
+			// Load shaders
+			std::array<VkPipelineShaderStageCreateInfo, 2> shaderStages;
+			shaderStages[0] = loadShader(getAssetPath() + "shaders/aparticlesystem/scene.vert.spv", VK_SHADER_STAGE_VERTEX_BIT);
+			shaderStages[1] = loadShader(getAssetPath() + "shaders/aparticlesystem/scene.frag.spv", VK_SHADER_STAGE_FRAGMENT_BIT);
+
+			// Additive blending
+			/*blendAttachmentState.colorWriteMask = 0xF;
+			blendAttachmentState.blendEnable = VK_TRUE;
+			blendAttachmentState.colorBlendOp = VK_BLEND_OP_ADD;
+			blendAttachmentState.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
+			blendAttachmentState.dstColorBlendFactor = VK_BLEND_FACTOR_ONE;
+			blendAttachmentState.alphaBlendOp = VK_BLEND_OP_ADD;
+			blendAttachmentState.srcAlphaBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+			blendAttachmentState.dstAlphaBlendFactor = VK_BLEND_FACTOR_DST_ALPHA;*/
+			
+			// Vertex input state for scene rendering
+			const std::vector<VkVertexInputBindingDescription> vertexInputBindings = {
+				vks::initializers::vertexInputBindingDescription(VERTEX_BUFFER_BIND_ID, sizeof(SGraphicEnvironment::SceneVertex), VK_VERTEX_INPUT_RATE_VERTEX)
+			};
+			// Describes memory layout and shader positions
+			const std::vector<VkVertexInputAttributeDescription> vertexInputAttributes = {
+				// Location 0 : Position
+				vks::initializers::vertexInputAttributeDescription(VERTEX_BUFFER_BIND_ID, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(SGraphicEnvironment::SceneVertex, pos)),
+				// Location 1 : Normal
+				vks::initializers::vertexInputAttributeDescription(VERTEX_BUFFER_BIND_ID, 1, VK_FORMAT_R32G32B32_SFLOAT, offsetof(SGraphicEnvironment::SceneVertex, normal)),
+				// Location 2 : Texture coordinates
+				vks::initializers::vertexInputAttributeDescription(VERTEX_BUFFER_BIND_ID, 2, VK_FORMAT_R32G32_SFLOAT, offsetof(SGraphicEnvironment::SceneVertex, uv)),
+				// Location 3 : Color
+				vks::initializers::vertexInputAttributeDescription(VERTEX_BUFFER_BIND_ID, 3, VK_FORMAT_R32G32B32_SFLOAT, offsetof(SGraphicEnvironment::SceneVertex, color)),
+			};
+			VkPipelineVertexInputStateCreateInfo vertexInputState = vks::initializers::pipelineVertexInputStateCreateInfo();
+			vertexInputState.vertexBindingDescriptionCount = static_cast<uint32_t>(vertexInputBindings.size());
+			vertexInputState.pVertexBindingDescriptions = vertexInputBindings.data();
+			vertexInputState.vertexAttributeDescriptionCount = static_cast<uint32_t>(vertexInputAttributes.size());
+			vertexInputState.pVertexAttributeDescriptions = vertexInputAttributes.data();
+
+			VkGraphicsPipelineCreateInfo pipelineCreateInfo = vks::initializers::pipelineCreateInfo(m_environment_binding.pipelineLayout, renderPass, 0);
+			pipelineCreateInfo.pVertexInputState = &vertexInputState;
+			pipelineCreateInfo.pInputAssemblyState = &inputAssemblyState;
+			pipelineCreateInfo.pRasterizationState = &rasterizationState;
+			pipelineCreateInfo.pColorBlendState = &colorBlendState;
+			pipelineCreateInfo.pMultisampleState = &multisampleState;
+			pipelineCreateInfo.pViewportState = &viewportState;
+			pipelineCreateInfo.pDepthStencilState = &depthStencilState;
+			pipelineCreateInfo.pDynamicState = &dynamicState;
+			pipelineCreateInfo.stageCount = static_cast<uint32_t>(shaderStages.size());
+			pipelineCreateInfo.pStages = shaderStages.data();
+			pipelineCreateInfo.renderPass = renderPass;
+			VK_CHECK_RESULT(vkCreateGraphicsPipelines(device, pipelineCache, 1, &pipelineCreateInfo, nullptr, &m_environment_binding.pipeline));
+		}
 	}
 	
 	void BuildGraphicComposition()
@@ -675,11 +782,19 @@ public:
 
 			VkRect2D scissor = vks::initializers::rect2D(width, height, 0, 0);
 			vkCmdSetScissor(drawCmdBuffers[i], 0, 1, &scissor);
+			VkDeviceSize offsets[1] = { 0 };
 
+			// 3D scene
+			vkCmdBindPipeline(drawCmdBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, m_environment_binding.pipeline);
+			vkCmdBindDescriptorSets(drawCmdBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, m_environment_binding.pipelineLayout, 0, 1, &m_environment_binding.descriptorSet, 0, NULL);
+			vkCmdBindVertexBuffers(drawCmdBuffers[i], VERTEX_BUFFER_BIND_ID, 1, &m_scene.vertices.buffer, offsets);
+			vkCmdBindIndexBuffer(drawCmdBuffers[i], m_scene.indices.buffer, 0, VK_INDEX_TYPE_UINT32);
+			vkCmdDrawIndexed(drawCmdBuffers[i], m_scene.indexCount, 1, 0, 0, 0);
+
+			//particle system
 			vkCmdBindPipeline(drawCmdBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, m_composition_binding.pipeline);
 			vkCmdBindDescriptorSets(drawCmdBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, m_composition_binding.pipelineLayout, 0, 1, &m_composition_binding.descriptorSet, 0, NULL);
 
-			VkDeviceSize offsets[1] = { 0 };
 			vkCmdBindVertexBuffers(drawCmdBuffers[i], VERTEX_BUFFER_BIND_ID, 1, &m_SSBOs.ssboParticles.buffer, offsets);
 			vkCmdBindIndexBuffer(drawCmdBuffers[i], m_SSBOs.ssboAliveListAfterSimulate.buffer, 0, VK_INDEX_TYPE_UINT32);
 			// If the multi draw feature is supported:
@@ -1056,6 +1171,21 @@ public:
 	}
 	void UpdateUniformBufferMarices()
 	{
+		m_environment_binding.sceneMatrices.projection = camera.matrices.perspective;
+		m_environment_binding.sceneMatrices.view = camera.matrices.view;
+		m_environment_binding.sceneMatrices.model = glm::mat4(
+			1.0f, 0.0f, 0.0f, 0.0f,
+			0.0f, 1.0f, 0.0f, 0.0f,
+			0.0f, 0.0f, 1.0f, 0.0f,
+			0.0f, 0.0f, 0.0f, 1.0f
+		);
+
+		// Map for host access
+		VK_CHECK_RESULT(m_environment_binding.uboSceneMatrices.map());
+		memcpy(m_environment_binding.uboSceneMatrices.mapped, &m_environment_binding.sceneMatrices, sizeof(m_environment_binding.sceneMatrices));
+		m_environment_binding.uboSceneMatrices.unmap();
+
+		
 		m_composition_binding.sceneMatrices.projection = camera.matrices.perspective;
 		m_composition_binding.sceneMatrices.view = camera.matrices.view;
 		m_composition_binding.sceneMatrices.model = glm::mat4(1.0f);
@@ -1124,6 +1254,7 @@ public:
 		BuildComputeEmission();
 		BuildComputeSimulation();
 		BuildComputeUpdateCounterEnd();
+		BuildGraphicEnvironment();
 		BuildGraphicComposition();
 
 		UpdateUBO();
