@@ -81,7 +81,7 @@ private:
 	uint32_t m_emitted_count = 0;//emitted particle count
 	uint32_t m_next_emit_count = 0;//emit particle count next time
 	
-	uint32_t m_max_particle_count = 8;//MAX_PARTICLE_COUNT;//max particle count for this particle system
+	uint32_t m_max_particle_count = 2048;//MAX_PARTICLE_COUNT;//max particle count for this particle system
 	//uint32_t m_particle_count = 10;//current partcle count
 
 	//Emission
@@ -313,7 +313,7 @@ public:
 		camera.type = Camera::CameraType::lookat;
 		camera.setPerspective(45.0f, (float)width / (float)height, zNear, zFar);
 		camera.setRotation(glm::vec3(-20.5f, -673.0f, 0.0f));
-		camera.setPosition(glm::vec3(0.0f, 0.0f, -175.0f));
+		camera.setPosition(glm::vec3(0.0f, 0.0f, -80.0f));
 		zoomSpeed = 10.0f;
 
 		//particle system start play
@@ -347,7 +347,7 @@ public:
 			vks::VERTEX_COMPONENT_COLOR,
 			vks::VERTEX_COMPONENT_NORMAL,
 		});
-		m_scene.loadFromFile(getAssetPath() + "models/shadowscene_fire.dae", vertexLayout, 2.0f, vulkanDevice, queue);
+		m_scene.loadFromFile(getAssetPath() + "models/shadowscene_fire.dae", vertexLayout, 1.0f, vulkanDevice, queue);
 		
 		m_textures.particle.loadFromFile(getAssetPath() + m_particles.GetTex(), VK_FORMAT_R8G8B8A8_UNORM, vulkanDevice, queue);
 		m_textures.gradient.loadFromFile(getAssetPath() + m_particles.GetGradientTex(), VK_FORMAT_R8G8B8A8_UNORM, vulkanDevice, queue);
@@ -661,7 +661,7 @@ public:
 			VkPipelineRasterizationStateCreateInfo rasterizationState = vks::initializers::pipelineRasterizationStateCreateInfo(VK_POLYGON_MODE_FILL, VK_CULL_MODE_NONE, VK_FRONT_FACE_COUNTER_CLOCKWISE, 0);
 			VkPipelineColorBlendAttachmentState blendAttachmentState = vks::initializers::pipelineColorBlendAttachmentState(0xf, VK_FALSE);
 			VkPipelineColorBlendStateCreateInfo colorBlendState = vks::initializers::pipelineColorBlendStateCreateInfo(1, &blendAttachmentState);
-			VkPipelineDepthStencilStateCreateInfo depthStencilState = vks::initializers::pipelineDepthStencilStateCreateInfo(VK_FALSE, VK_FALSE, VK_COMPARE_OP_ALWAYS);
+			VkPipelineDepthStencilStateCreateInfo depthStencilState = vks::initializers::pipelineDepthStencilStateCreateInfo(VK_TRUE, VK_TRUE, VK_COMPARE_OP_LESS_OR_EQUAL);
 			VkPipelineViewportStateCreateInfo viewportState = vks::initializers::pipelineViewportStateCreateInfo(1, 1, 0);
 			VkPipelineMultisampleStateCreateInfo multisampleState = vks::initializers::pipelineMultisampleStateCreateInfo(VK_SAMPLE_COUNT_1_BIT, 0);
 			std::vector<VkDynamicState> dynamicStateEnables = { VK_DYNAMIC_STATE_VIEWPORT,VK_DYNAMIC_STATE_SCISSOR };
@@ -1138,8 +1138,8 @@ public:
 	{
 		m_UBOs.emitterParams.emitCount = m_particles.GetEmitParticleCount();
 		m_UBOs.emitterParams.particleLifeMax = m_particles.GetEmitParticleLifeMax();
-		m_UBOs.emitterParams.randomSeed = frameTimer * 1000;
-		std::cout << m_UBOs.emitterParams.emitCount << std::endl;
+		m_UBOs.emitterParams.randomSeed = frameTimer * 1000;//:ms
+		//std::cout << m_UBOs.emitterParams.emitCount << std::endl;
 
 		// Map for host access
 		VK_CHECK_RESULT(m_UBOs.uboEmitter.map());
@@ -1149,7 +1149,7 @@ public:
 	
 	void UpdateUniformBufferAttractor()
 	{
-		m_simulation_binding.attractorParams.deltaT = frameTimer*1000;
+		m_simulation_binding.attractorParams.deltaT = frameTimer*1000;//:ms
 		if (m_animate)
 		{
 			m_simulation_binding.attractorParams.destX = sin(glm::radians(timer * 360.0f)) * 0.75f;
@@ -1185,10 +1185,16 @@ public:
 		memcpy(m_environment_binding.uboSceneMatrices.mapped, &m_environment_binding.sceneMatrices, sizeof(m_environment_binding.sceneMatrices));
 		m_environment_binding.uboSceneMatrices.unmap();
 
-		
+
+		const float PI = 3.1415926535898f;
+		glm::mat4 local = glm::mat4(1.0f);
+		//local = glm::scale(local, glm::vec3(0.5f));
+		local = glm::rotate(local, PI, glm::vec3(1, 0, 0));
+		local = glm::translate(local, glm::vec3(0, 7, 0));
+
 		m_composition_binding.sceneMatrices.projection = camera.matrices.perspective;
 		m_composition_binding.sceneMatrices.view = camera.matrices.view;
-		m_composition_binding.sceneMatrices.model = glm::mat4(1.0f);
+		m_composition_binding.sceneMatrices.model = local;
 
 		// Map for host access
 		VK_CHECK_RESULT(m_composition_binding.uboSceneMatrices.map());
@@ -1288,9 +1294,20 @@ public:
 
 	virtual void OnUpdateUIOverlay(vks::UIOverlay* overlay)
 	{
-		if (overlay->header("Settings")) {
-			overlay->checkBox("Moving attractor", &m_animate);
-			//overlay->checkBox("Moving attractor", &animate);
+		if (overlay->header("Particle System")) {
+			/*if (overlay->checkBox("Enable SSAO", &uboSSAOParams.ssao)) {
+				updateUniformBufferSSAOParams();
+			}
+			if (overlay->checkBox("SSAO blur", &uboSSAOParams.ssaoBlur)) {
+				updateUniformBufferSSAOParams();
+			}
+			if (overlay->checkBox("SSAO pass only", &uboSSAOParams.ssaoOnly)) {
+				updateUniformBufferSSAOParams();
+			}*/
+		}
+		if (overlay->header("Emitter")) {
+			overlay->checkBox("Offset", &m_animate);
+			
 		}
 	}
 };

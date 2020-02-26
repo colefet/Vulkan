@@ -96,6 +96,7 @@ void main()
     // simulation can be either fixed or variable timestep:
 	//const float dt = xEmitterFixedTimestep >= 0 ? xEmitterFixedTimestep : g_xFrame_DeltaTime;
     const float dt = uboSimulate.deltaT;
+    const float dt_speed = dt*0.05;
 
     uint particleIndex= 0;
     // Read position and velocity
@@ -107,33 +108,33 @@ void main()
     }
     
     if(ssboParticle.particles[particleIndex].life > 0){
-    //if(true){
-        /*vec2 vVel = ssboParticle.particles[particleIndex].vel.xy;
-        vec2 vPos = ssboParticle.particles[particleIndex].pos.xy;
+        vec3 vPos = ssboParticle.particles[particleIndex].pos.xyz;
+        vec3 vVel = ssboParticle.particles[particleIndex].vel.xyz;
 
-        vec2 destPos = vec2(uboSimulate.destX, uboSimulate.destY);
-
+        //attractor
+        /*vec3 destPos = vec2(uboSimulate.destX, uboSimulate.destY);
         vec2 delta = destPos - vPos;
         float targetDistance = sqrt(dot(delta, delta));
-        vVel += repulsion(vPos, destPos.xy) * 0.05;
+        vVel += repulsion(vPos, destPos.xy) * 0.05;*/
 
         // Move by velocity
-        vPos += vVel * uboSimulate.deltaT;
+        vPos += vVel * dt_speed;
 
         // collide with boundary
-        if ((vPos.x < -1.0) || (vPos.x > 1.0) || (vPos.y < -1.0) || (vPos.y > 1.0)){
+        /*if ((vPos.x < -1.0) || (vPos.x > 1.0) || (vPos.y < -1.0) || (vPos.y > 1.0)){
             vVel = (-vVel * 0.1) + attraction(vPos, destPos) * 12;
         }
         else{
             ssboParticle.particles[particleIndex].pos.xy = vPos;
-        }
+        }*/
 
         // Write back
-        ssboParticle.particles[particleIndex].vel.xy = vVel;
-        ssboParticle.particles[particleIndex].gradientUV.x += 0.02 * uboSimulate.deltaT;
+        ssboParticle.particles[particleIndex].pos.xyz = vPos;
+        ssboParticle.particles[particleIndex].vel.xyz = vVel.xyz;
+        ssboParticle.particles[particleIndex].gradientUV.x += 0.02 * dt_speed;
         if (ssboParticle.particles[particleIndex].gradientUV.x > 1.0){
             ssboParticle.particles[particleIndex].gradientUV.x -= 1.0;
-        }*/
+        }
         ssboParticle.particles[particleIndex].life -= dt;
 
         // add to new alive list:
