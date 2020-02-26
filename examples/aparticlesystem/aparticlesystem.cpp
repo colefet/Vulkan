@@ -28,7 +28,7 @@
 #else
 #define MAX_PARTICLE_COUNT 256 * 1024
 #endif
-
+#define PI 3.1415926535898f
 class CParticle
 {
 public:
@@ -75,6 +75,12 @@ public:
 	const std::string& GetTex() { return m_particle_tex; }
 	const std::string& GetGradientTex() { return m_gradient_tex; }
 
+	void SetPos(const glm::vec3& pos) { m_pos = pos; };
+	const glm::vec3& GetPos() { return m_pos; };
+
+	void SetRot(const glm::vec3& rot) { m_rot = rot; };
+	const glm::vec3& GetRot() { return m_rot; };
+
 private:
 	uint32_t m_age = 0;//ms
 	float m_delta_time = 0;//ms
@@ -92,6 +98,7 @@ private:
 	
 	//Simulation
 	glm::vec3 m_pos = { 0.0f, 0.0f, 0.0f };
+	glm::vec3 m_rot = { 0.0f, 0.0f, 0.0f };
 	
 	//Appearance
 	std::string m_particle_tex = "textures/particle01_rgba.ktx";
@@ -312,12 +319,15 @@ public:
 		float zFar = 1024.0f;
 		camera.type = Camera::CameraType::lookat;
 		camera.setPerspective(45.0f, (float)width / (float)height, zNear, zFar);
-		camera.setRotation(glm::vec3(-20.5f, -673.0f, 0.0f));
+		//camera.setRotation(glm::vec3(-20.5f, -673.0f, 0.0f));
+		camera.setRotation(glm::vec3(-30.0f, 10.0f, 0.0f));
 		camera.setPosition(glm::vec3(0.0f, 0.0f, -80.0f));
 		zoomSpeed = 10.0f;
 
 		//particle system start play
 		m_particles.Initial(frameTimer);
+		m_particles.SetPos(glm::vec3 (0.0f, 7.0f, 0.0f));
+		m_particles.SetRot(glm::vec3(1.0f, 0.0f, 0.0f));
 	}
 
 	~VulkanExample()
@@ -1186,11 +1196,10 @@ public:
 		m_environment_binding.uboSceneMatrices.unmap();
 
 
-		const float PI = 3.1415926535898f;
 		glm::mat4 local = glm::mat4(1.0f);
 		//local = glm::scale(local, glm::vec3(0.5f));
-		local = glm::rotate(local, PI, glm::vec3(1, 0, 0));
-		local = glm::translate(local, glm::vec3(0, 7, 0));
+		local = glm::rotate(local, m_particles.GetRot()[0]*PI, glm::vec3(1, 0, 0));
+		local = glm::translate(local, m_particles.GetPos());
 
 		m_composition_binding.sceneMatrices.projection = camera.matrices.perspective;
 		m_composition_binding.sceneMatrices.view = camera.matrices.view;
@@ -1295,15 +1304,34 @@ public:
 	virtual void OnUpdateUIOverlay(vks::UIOverlay* overlay)
 	{
 		if (overlay->header("Particle System")) {
-			/*if (overlay->checkBox("Enable SSAO", &uboSSAOParams.ssao)) {
-				updateUniformBufferSSAOParams();
+			overlay->text("World Position");
+			glm::vec3 pos = m_particles.GetPos();
+			if (overlay->sliderFloat("p_x", &pos[0], -10.0f, 10.0f)) {
+				m_particles.SetPos(pos);
+				UpdateUniformBufferMarices();
 			}
-			if (overlay->checkBox("SSAO blur", &uboSSAOParams.ssaoBlur)) {
-				updateUniformBufferSSAOParams();
+			if (overlay->sliderFloat("p_y", &pos[1], -10.0f, 10.0f)) {
+				m_particles.SetPos(pos);
+				UpdateUniformBufferMarices();
 			}
-			if (overlay->checkBox("SSAO pass only", &uboSSAOParams.ssaoOnly)) {
-				updateUniformBufferSSAOParams();
-			}*/
+			if (overlay->sliderFloat("p_z", &pos[2], -10.0f, 10.0f)) {
+				m_particles.SetPos(pos);
+				UpdateUniformBufferMarices();
+			}
+			overlay->text("Rotation");
+			glm::vec3 rot = m_particles.GetRot();
+			if (overlay->sliderFloat("r_x", &rot[0], 0.0f, 2.0f)) {
+				m_particles.SetRot(rot);
+				UpdateUniformBufferMarices();
+			}
+			if (overlay->sliderFloat("r_y", &rot[1], 0.0f, 2.0f)) {
+				m_particles.SetRot(rot);
+				UpdateUniformBufferMarices();
+			}
+			if (overlay->sliderFloat("r_z", &rot[2], 0.0f, 2.0f)) {
+				m_particles.SetRot(rot);
+				UpdateUniformBufferMarices();
+			}
 		}
 		if (overlay->header("Emitter")) {
 			overlay->checkBox("Offset", &m_animate);
