@@ -1164,6 +1164,9 @@ void VulkanExampleBase::handleMessages(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
 	case WM_PAINT:
 		ValidateRect(window, NULL);
 		break;
+	case WM_CHAR:
+		handleKeyDown(wParam);
+		break;
 	case WM_KEYDOWN:
 		keyboardButtons[wParam] = true;
 		switch (wParam)
@@ -2230,6 +2233,21 @@ void VulkanExampleBase::windowResize()
 	viewChanged();
 
 	prepared = true;
+}
+
+void VulkanExampleBase::handleKeyDown(int32_t key)
+{
+	bool handled = false;
+	if (settings.overlay) {
+		ImGuiIO& io = ImGui::GetIO();
+		handled = io.WantCaptureKeyboard;
+		if (handled) {
+			// You can also use ToAscii()+GetKeyboardState() to retrieve characters.
+			io.AddInputCharacter((unsigned short)key);
+			//io.AddInputCharacter((ImWchar)ToAscii());
+		}
+	}
+	return;
 }
 
 void VulkanExampleBase::handleMouseMove(int32_t x, int32_t y)

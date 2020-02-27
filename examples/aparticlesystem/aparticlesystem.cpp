@@ -70,8 +70,6 @@ public:
 	uint32_t GetEmitParticleCount() { return m_next_emit_count; };
 	uint32_t GetEmitParticleLifeMax() { return m_particle_life_max; };
 	
-	uint32_t GetMaxParticleCount() { return m_max_particle_count; };
-	//uint32_t GetParticleCount() { return m_particle_count; };
 	const std::string& GetTex() { return m_particle_tex; }
 	const std::string& GetGradientTex() { return m_gradient_tex; }
 
@@ -81,24 +79,24 @@ public:
 	void SetRot(const glm::vec3& rot) { m_rot = rot; };
 	const glm::vec3& GetRot() { return m_rot; };
 
+	void SetMaxParticleCount( uint32_t num) { m_max_particle_count = ceil(num/4.0f)*4; };
+	uint32_t GetMaxParticleCount() { return m_max_particle_count; };
+	//uint32_t GetParticleCount() { return m_particle_count; };
+
 private:
-	uint32_t m_age = 0;//ms
-	float m_delta_time = 0;//ms
+	uint32_t m_age = 0;//(ms)Particle system age
+	float m_delta_time = 0;//(ms)delta teme for update
 	uint32_t m_emitted_count = 0;//emitted particle count
 	uint32_t m_next_emit_count = 0;//emit particle count next time
 	
-	uint32_t m_max_particle_count = 2048;//MAX_PARTICLE_COUNT;//max particle count for this particle system
-	//uint32_t m_particle_count = 10;//current partcle count
-
-	//Emission
+	//General
+	glm::vec3 m_pos = { 0.0f, 0.0f, 0.0f };
+	glm::vec3 m_rot = { 0.0f, 0.0f, 0.0f };
+	uint32_t m_max_particle_count = 1024*2;//MAX_PARTICLE_COUNT;//max particle count for this particle system	
 	uint32_t m_emit_count = 1;
 	uint32_t m_emit_interval = 1;
 
 	uint32_t m_particle_life_max = 2000;
-	
-	//Simulation
-	glm::vec3 m_pos = { 0.0f, 0.0f, 0.0f };
-	glm::vec3 m_rot = { 0.0f, 0.0f, 0.0f };
 	
 	//Appearance
 	std::string m_particle_tex = "textures/particle01_rgba.ktx";
@@ -1304,40 +1302,21 @@ public:
 	virtual void OnUpdateUIOverlay(vks::UIOverlay* overlay)
 	{
 		if (overlay->header("Particle System")) {
-			overlay->text("World Position");
 			glm::vec3 pos = m_particles.GetPos();
-			if (overlay->sliderFloat("p_x", &pos[0], -10.0f, 10.0f)) {
-				m_particles.SetPos(pos);
-				//m_environment_binding.sceneMatrices.lightPos = glm::vec4(pos.x * 1.0f,pos.y*-10.0f,pos.z * -1.0f,1.0);
-				UpdateUBOMatrices();
-			}
-			if (overlay->sliderFloat("p_y", &pos[1], -10.0f, 10.0f)) {
-				m_particles.SetPos(pos);
+			if (overlay->inputFloat3("Position", &pos[0], 2)) {
 				//m_environment_binding.sceneMatrices.lightPos = glm::vec4(pos.x * 1.0f, pos.y * -10.0f, pos.z * -1.0f, 1.0);
-				UpdateUBOMatrices();
-			}
-			if (overlay->sliderFloat("p_z", &pos[2], -10.0f, 10.0f)) {
 				m_particles.SetPos(pos);
-				//m_environment_binding.sceneMatrices.lightPos = glm::vec4(pos.x * 1.0f, pos.y * -10.0f, pos.z * -1.0f, 1.0);
 				UpdateUBOMatrices();
 			}
-			overlay->text("Rotation");
 			glm::vec3 rot = m_particles.GetRot();
-			if (overlay->inputFloat3("rotate", &rot[0], 0.0f, 2.0f)) {
+			if (overlay->inputFloat3("Rotate", &rot[0], 2)) {
 				m_particles.SetRot(rot);
 				UpdateUBOMatrices();
 			}
-			if (overlay->sliderFloat("r_x", &rot[0], 0.0f, 2.0f)) {
-				m_particles.SetRot(rot);
-				UpdateUBOMatrices();
-			}
-			if (overlay->sliderFloat("r_y", &rot[1], 0.0f, 2.0f)) {
-				m_particles.SetRot(rot);
-				UpdateUBOMatrices();
-			}
-			if (overlay->sliderFloat("r_z", &rot[2], 0.0f, 2.0f)) {
-				m_particles.SetRot(rot);
-				UpdateUBOMatrices();
+			int32_t num = m_particles.GetMaxParticleCount();
+			if (overlay->sliderInt("Max Particle", &num, 4, 4*1024)) {
+				m_particles.SetMaxParticleCount(num);
+				//UpdateUBOMatrices();
 			}
 		}
 		if (overlay->header("Emitter")) {
