@@ -202,6 +202,8 @@ public:
 		bool middle = false;
 	} mouseButtons;
 
+	bool keyboardButtons[512] = {false};
+
 	// OS specific 
 #if defined(_WIN32)
 	HWND window;

@@ -67,7 +67,8 @@ VkResult VulkanExampleBase::createInstance(bool enableValidation)
 	{
 		// The VK_LAYER_KHRONOS_validation contains all current validation functionality.
 		// Note that on Android this layer requires at least NDK r20 
-		const char* validationLayerName = "VK_LAYER_KHRONOS_validation";
+		//const char* validationLayerName = "VK_LAYER_KHRONOS_validation";
+		const char* validationLayerName = "VK_LAYER_LUNARG_standard_validation";
 		// Check if this layer is available at instance level
 		uint32_t instanceLayerCount;
 		vkEnumerateInstanceLayerProperties(&instanceLayerCount, nullptr);
@@ -588,6 +589,8 @@ void VulkanExampleBase::updateOverlay()
 	io.MousePos = ImVec2(mousePos.x, mousePos.y);
 	io.MouseDown[0] = mouseButtons.left;
 	io.MouseDown[1] = mouseButtons.right;
+
+	memcpy(io.KeysDown, keyboardButtons, 512*sizeof(bool));
 
 	ImGui::NewFrame();
 
@@ -1162,6 +1165,7 @@ void VulkanExampleBase::handleMessages(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
 		ValidateRect(window, NULL);
 		break;
 	case WM_KEYDOWN:
+		keyboardButtons[wParam] = true;
 		switch (wParam)
 		{
 		case KEY_P:
@@ -1199,6 +1203,7 @@ void VulkanExampleBase::handleMessages(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
 		keyPressed((uint32_t)wParam);
 		break;
 	case WM_KEYUP:
+		keyboardButtons[wParam] = false;
 		if (camera.firstperson)
 		{
 			switch (wParam)

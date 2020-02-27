@@ -436,6 +436,13 @@ namespace vks
 		return res;
 	}
 
+	bool UIOverlay::inputFloat3(const char* caption, float* value, float step, uint32_t precision)
+	{
+		bool res = ImGui::InputFloat3(caption, value, precision);
+		if (res) { updated = true; };
+		return res;
+	}
+
 	bool UIOverlay::sliderFloat(const char* caption, float* value, float min, float max)
 	{
 		bool res = ImGui::SliderFloat(caption, value, min, max);

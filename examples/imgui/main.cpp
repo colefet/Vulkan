@@ -789,6 +789,8 @@ public:
 		io.MouseDown[0] = mouseButtons.left;
 		io.MouseDown[1] = mouseButtons.right;
 
+		memcpy(io.KeysDown, keyboardButtons, 512 * sizeof(bool));
+
 		draw();
 
 		if (uiSettings.animateLight)

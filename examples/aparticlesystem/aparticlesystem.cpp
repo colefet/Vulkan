@@ -122,7 +122,7 @@ public:
 		void Destroy()
 		{
 			particle.destroy();
-			particle.destroy();
+			gradient.destroy();
 		}
 	} m_textures;
 
@@ -257,7 +257,7 @@ public:
 			glm::mat4 projection;
 			glm::mat4 view;
 			glm::mat4 model;
-			glm::vec4 lightPos = glm::vec4(0.0f, 1.0f, 0.0f, 0.0f);
+			glm::vec4 lightPos = glm::vec4(0.0f, -25.0f, 0.0f, 0.0f);
 		} sceneMatrices;
 		vks::Buffer uboSceneMatrices;
 		VkDescriptorSetLayout descriptorSetLayout;	// shader binding layout
@@ -320,14 +320,14 @@ public:
 		camera.type = Camera::CameraType::lookat;
 		camera.setPerspective(45.0f, (float)width / (float)height, zNear, zFar);
 		//camera.setRotation(glm::vec3(-20.5f, -673.0f, 0.0f));
-		camera.setRotation(glm::vec3(-30.0f, 10.0f, 0.0f));
+		camera.setRotation(glm::vec3(150.0f, -10.0f, 0.0f));
 		camera.setPosition(glm::vec3(0.0f, 0.0f, -80.0f));
 		zoomSpeed = 10.0f;
 
 		//particle system start play
 		m_particles.Initial(frameTimer);
 		m_particles.SetPos(glm::vec3 (0.0f, 7.0f, 0.0f));
-		m_particles.SetRot(glm::vec3(1.0f, 0.0f, 0.0f));
+		m_particles.SetRot(glm::vec3(0.0f, 0.0f, 0.0f));
 	}
 
 	~VulkanExample()
@@ -1157,7 +1157,7 @@ public:
 		m_UBOs.uboEmitter.unmap();
 	}
 	
-	void UpdateUniformBufferAttractor()
+	void UpdateUBOAttractor()
 	{
 		m_simulation_binding.attractorParams.deltaT = frameTimer*1000;//:ms
 		if (m_animate)
@@ -1179,23 +1179,24 @@ public:
 		memcpy(m_simulation_binding.uboAttractor.mapped, &m_simulation_binding.attractorParams, sizeof(m_simulation_binding.attractorParams));
 		m_simulation_binding.uboAttractor.unmap();
 	}
-	void UpdateUniformBufferMarices()
+	void UpdateUBOMatrices()
 	{
-		m_environment_binding.sceneMatrices.projection = camera.matrices.perspective;
-		m_environment_binding.sceneMatrices.view = camera.matrices.view;
-		m_environment_binding.sceneMatrices.model = glm::mat4(
-			1.0f, 0.0f, 0.0f, 0.0f,
-			0.0f, 1.0f, 0.0f, 0.0f,
-			0.0f, 0.0f, 1.0f, 0.0f,
-			0.0f, 0.0f, 0.0f, 1.0f
-		);
+		//scene matrix
+		{
+			glm::mat4 local = glm::mat4(1.0f);
+			local = glm::rotate(local,  PI, glm::vec3(1, 0, 0));
+			
+			m_environment_binding.sceneMatrices.projection = camera.matrices.perspective;
+			m_environment_binding.sceneMatrices.view = camera.matrices.view;
+			m_environment_binding.sceneMatrices.model = local;
 
-		// Map for host access
-		VK_CHECK_RESULT(m_environment_binding.uboSceneMatrices.map());
-		memcpy(m_environment_binding.uboSceneMatrices.mapped, &m_environment_binding.sceneMatrices, sizeof(m_environment_binding.sceneMatrices));
-		m_environment_binding.uboSceneMatrices.unmap();
-
-
+			// Map for host access
+			VK_CHECK_RESULT(m_environment_binding.uboSceneMatrices.map());
+			memcpy(m_environment_binding.uboSceneMatrices.mapped, &m_environment_binding.sceneMatrices, sizeof(m_environment_binding.sceneMatrices));
+			m_environment_binding.uboSceneMatrices.unmap();
+		}
+		
+		//particle matrix
 		glm::mat4 local = glm::mat4(1.0f);
 		//local = glm::scale(local, glm::vec3(0.5f));
 		local = glm::rotate(local, m_particles.GetRot()[0]*PI, glm::vec3(1, 0, 0));
@@ -1213,13 +1214,12 @@ public:
 	void UpdateUBO()
 	{
 		UpdateUBOEmitter();
-		UpdateUniformBufferAttractor();
-		UpdateUniformBufferMarices();
+		UpdateUBOAttractor();
+		UpdateUBOMatrices();
 	}
 
 	void Update()
 	{
-		//std::cout << frameTimer << std::endl;
 		m_particles.Update(frameTimer);
 		UpdateUBO();
 
@@ -1308,29 +1308,36 @@ public:
 			glm::vec3 pos = m_particles.GetPos();
 			if (overlay->sliderFloat("p_x", &pos[0], -10.0f, 10.0f)) {
 				m_particles.SetPos(pos);
-				UpdateUniformBufferMarices();
+				//m_environment_binding.sceneMatrices.lightPos = glm::vec4(pos.x * 1.0f,pos.y*-10.0f,pos.z * -1.0f,1.0);
+				UpdateUBOMatrices();
 			}
 			if (overlay->sliderFloat("p_y", &pos[1], -10.0f, 10.0f)) {
 				m_particles.SetPos(pos);
-				UpdateUniformBufferMarices();
+				//m_environment_binding.sceneMatrices.lightPos = glm::vec4(pos.x * 1.0f, pos.y * -10.0f, pos.z * -1.0f, 1.0);
+				UpdateUBOMatrices();
 			}
 			if (overlay->sliderFloat("p_z", &pos[2], -10.0f, 10.0f)) {
 				m_particles.SetPos(pos);
-				UpdateUniformBufferMarices();
+				//m_environment_binding.sceneMatrices.lightPos = glm::vec4(pos.x * 1.0f, pos.y * -10.0f, pos.z * -1.0f, 1.0);
+				UpdateUBOMatrices();
 			}
 			overlay->text("Rotation");
 			glm::vec3 rot = m_particles.GetRot();
+			if (overlay->inputFloat3("rotate", &rot[0], 0.0f, 2.0f)) {
+				m_particles.SetRot(rot);
+				UpdateUBOMatrices();
+			}
 			if (overlay->sliderFloat("r_x", &rot[0], 0.0f, 2.0f)) {
 				m_particles.SetRot(rot);
-				UpdateUniformBufferMarices();
+				UpdateUBOMatrices();
 			}
 			if (overlay->sliderFloat("r_y", &rot[1], 0.0f, 2.0f)) {
 				m_particles.SetRot(rot);
-				UpdateUniformBufferMarices();
+				UpdateUBOMatrices();
 			}
 			if (overlay->sliderFloat("r_z", &rot[2], 0.0f, 2.0f)) {
 				m_particles.SetRot(rot);
-				UpdateUniformBufferMarices();
+				UpdateUBOMatrices();
 			}
 		}
 		if (overlay->header("Emitter")) {
