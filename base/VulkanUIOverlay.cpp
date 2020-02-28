@@ -7,6 +7,7 @@
 */
 
 #include "VulkanUIOverlay.h"
+#include <functional>
 
 namespace vks 
 {
@@ -413,6 +414,15 @@ namespace vks
 		return ImGui::CollapsingHeader(caption, ImGuiTreeNodeFlags_DefaultOpen);
 	}
 
+	bool UIOverlay::treeNodeBegin(const char* caption)
+	{
+		return ImGui::TreeNode(caption);
+	}
+	void UIOverlay::treeNodeEnd()
+	{
+		return ImGui::TreePop();
+	}
+
 	bool UIOverlay::checkBox(const char *caption, bool *value)
 	{
 		bool res = ImGui::Checkbox(caption, value);
@@ -443,9 +453,24 @@ namespace vks
 		return res;
 	}
 
+	bool UIOverlay::inputEditor(const char* caption, char* buf, uint32_t buf_size)
+	{
+		std::function<void(void)> enterCallback = []{};
+		bool res = ImGui::InputTextMultiline(caption, buf, buf_size, ImVec2(0, 0));
+		if (res) { updated = true; };
+		return res;
+	}
+
 	bool UIOverlay::sliderFloat(const char* caption, float* value, float min, float max)
 	{
 		bool res = ImGui::SliderFloat(caption, value, min, max);
+		if (res) { updated = true; };
+		return res;
+	}
+
+	bool UIOverlay::sliderFloat3(const char* caption, float* value, float min, float max)
+	{
+		bool res = ImGui::SliderFloat3(caption, value, min, max, "%.2f");
 		if (res) { updated = true; };
 		return res;
 	}

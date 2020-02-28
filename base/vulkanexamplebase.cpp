@@ -1165,10 +1165,11 @@ void VulkanExampleBase::handleMessages(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
 		ValidateRect(window, NULL);
 		break;
 	case WM_CHAR:
-		handleKeyDown(wParam);
+		//handleKeyDown(wParam);
 		break;
 	case WM_KEYDOWN:
 		keyboardButtons[wParam] = true;
+		handleKeyDown(wParam, lParam);
 		switch (wParam)
 		{
 		case KEY_P:
@@ -2235,7 +2236,7 @@ void VulkanExampleBase::windowResize()
 	prepared = true;
 }
 
-void VulkanExampleBase::handleKeyDown(int32_t key)
+void VulkanExampleBase::handleKeyDown(WPARAM wParam, LPARAM lParam)
 {
 	bool handled = false;
 	if (settings.overlay) {
@@ -2243,8 +2244,19 @@ void VulkanExampleBase::handleKeyDown(int32_t key)
 		handled = io.WantCaptureKeyboard;
 		if (handled) {
 			// You can also use ToAscii()+GetKeyboardState() to retrieve characters.
-			io.AddInputCharacter((unsigned short)key);
-			//io.AddInputCharacter((ImWchar)ToAscii());
+			//io.AddInputCharacter((unsigned short)key);
+
+			UINT vKey = wParam;//ĞéÄâÂë
+			UINT nScan = 0;//É¨ÃèÂë
+			BYTE kbArray[256]={0};
+			WORD uChar = 0;
+			GetKeyboardState(kbArray);
+			if (ToAscii(vKey, nScan, kbArray, &uChar, 0)>0)
+			{
+				char c = (char)uChar;
+				std::cout << c << std::endl;
+				io.AddInputCharacter(c);
+			}
 		}
 	}
 	return;

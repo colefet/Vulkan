@@ -57,6 +57,14 @@ public:
 	void Destroy(VkDevice device)
 	{
 	}
+
+	void Reset()
+	{
+		m_age = 0;
+		m_delta_time = 0;
+		m_emitted_count = 0;
+		m_next_emit_count = 0;
+	}
 	void Update(float timer)
 	{
 		m_delta_time += (timer * 1000 );
@@ -79,9 +87,12 @@ public:
 	void SetRot(const glm::vec3& rot) { m_rot = rot; };
 	const glm::vec3& GetRot() { return m_rot; };
 
-	void SetMaxParticleCount( uint32_t num) { m_max_particle_count = ceil(num/4.0f)*4; };
+	void SetMaxParticleCount(uint32_t num) { m_max_particle_count = ceil(num/4.0f)*4; };
 	uint32_t GetMaxParticleCount() { return m_max_particle_count; };
 	//uint32_t GetParticleCount() { return m_particle_count; };
+
+	void SetStr(const std::string& str) { m_str = str; };
+	const std::string& GetStr() { return m_str; };
 
 private:
 	uint32_t m_age = 0;//(ms)Particle system age
@@ -96,6 +107,8 @@ private:
 	uint32_t m_emit_count = 1;
 	uint32_t m_emit_interval = 1;
 
+	std::string m_str = "Hello World!";
+	
 	uint32_t m_particle_life_max = 2000;
 	
 	//Appearance
@@ -341,9 +354,9 @@ public:
 		vkDestroyFence(device, compute.fence, nullptr);
 		vkDestroyCommandPool(device, compute.commandPool, nullptr);
 
-		m_textures.Destroy();
 		m_SSBOs.Destroy();
 		m_UBOs.Destroy();
+		m_textures.Destroy();
 		m_scene.destroy();
 	}
 	
@@ -359,6 +372,34 @@ public:
 		
 		m_textures.particle.loadFromFile(getAssetPath() + m_particles.GetTex(), VK_FORMAT_R8G8B8A8_UNORM, vulkanDevice, queue);
 		m_textures.gradient.loadFromFile(getAssetPath() + m_particles.GetGradientTex(), VK_FORMAT_R8G8B8A8_UNORM, vulkanDevice, queue);
+	}
+
+	void Reset()
+	{
+		m_particles.Reset();
+
+		m_updater_begin_binding.Destroy(device);
+		m_emission_binding.Destroy(device);
+		m_simulation_binding.Destroy(device);
+		m_updater_end_binding.Destroy(device);
+		m_environment_binding.Destroy(device);
+		m_composition_binding.Destroy(device);
+
+		m_SSBOs.Destroy();
+		
+		//BuildSSBOsWithParticle();
+		BuildSSBOs();
+
+		SetupDescriptorPool();
+		BuildComputeUpdateCounterBegin();
+		BuildComputeEmission();
+		BuildComputeSimulation();
+		BuildComputeUpdateCounterEnd();
+		BuildGraphicEnvironment();
+		BuildGraphicComposition();
+
+		buildComputeCommandBuffer();
+		buildCommandBuffers();
 	}
 
 	void SetupDescriptorPool()
@@ -972,7 +1013,7 @@ public:
 			sizeof(m_UBOs.emitterParams));
 	}
 	// Setup and fill the compute shader storage buffers containing the particles
-	void BuildSSBOs()
+	void BuildSSBOsWithParticle()
 	{
 		//Particle buffer
 		{
@@ -986,9 +1027,9 @@ public:
 			//	particle.vel = glm::vec3(0.0f);
 			//	particle.gradientPos.x = particle.pos.x / 2.0f;
 			//}
-			
+
 			std::vector<SSBOs::SParticle> particleBuffer(m_particles.GetMaxParticleCount());
-			
+
 			// Staging
 			// SSBO won't be changed on the host after upload so copy to device local memory
 			vks::Buffer stagingBuffer;
@@ -1006,7 +1047,7 @@ public:
 				VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
 				&m_SSBOs.ssboParticles,
 				storageBufferSize);
-			
+
 			// Copy to staging buffer
 			VkCommandBuffer copyCmd = VulkanExampleBase::createCommandBuffer(VK_COMMAND_BUFFER_LEVEL_PRIMARY, true);
 			VkBufferCopy copyRegion = {};
@@ -1015,14 +1056,14 @@ public:
 			VulkanExampleBase::flushCommandBuffer(copyCmd, queue, true);
 			stagingBuffer.destroy();
 		}
-		 //dead list
+		//dead list
 		{
 			std::vector<uint32_t> dead_list(m_particles.GetMaxParticleCount());
 			for (uint32_t i = 0; i < dead_list.size(); ++i)
 			{
 				dead_list[i] = i;
 			}
-			
+
 			// Staging
 			// SSBO won't be changed on the host after upload so copy to device local memory
 			vks::Buffer stagingBuffer;
@@ -1093,7 +1134,7 @@ public:
 			uint32_t dead_count = m_particles.GetMaxParticleCount();
 			uint32_t alive_count = 0;
 			uint32_t alive_count_after_simulate = 0;
-			std::vector<uint32_t> counter ={ emit_count, dead_count, alive_count, alive_count_after_simulate };
+			std::vector<uint32_t> counter = { emit_count, dead_count, alive_count, alive_count_after_simulate };
 
 			// Staging
 			// SSBO won't be changed on the host after upload so copy to device local memory
@@ -1121,6 +1162,11 @@ public:
 			VulkanExampleBase::flushCommandBuffer(copyCmd, queue, true);
 			stagingBuffer.destroy();
 		}
+	}
+	void BuildSSBOs()
+	{
+		BuildSSBOsWithParticle();
+		
 		// indirect buffer
 		{
 			struct SIndirectParam
@@ -1302,27 +1348,46 @@ public:
 	virtual void OnUpdateUIOverlay(vks::UIOverlay* overlay)
 	{
 		if (overlay->header("Particle System")) {
-			glm::vec3 pos = m_particles.GetPos();
-			if (overlay->inputFloat3("Position", &pos[0], 2)) {
-				//m_environment_binding.sceneMatrices.lightPos = glm::vec4(pos.x * 1.0f, pos.y * -10.0f, pos.z * -1.0f, 1.0);
-				m_particles.SetPos(pos);
-				UpdateUBOMatrices();
+			if (overlay->treeNodeBegin("General")) {
+				glm::vec3 pos = m_particles.GetPos();
+				if (overlay->inputFloat3("Position", &pos[0], 2)) {
+					//m_environment_binding.sceneMatrices.lightPos = glm::vec4(pos.x * 1.0f, pos.y * -10.0f, pos.z * -1.0f, 1.0);
+					m_particles.SetPos(pos);
+					UpdateUBOMatrices();
+				}
+				
+				glm::vec3 rot = m_particles.GetRot();
+				if (overlay->sliderFloat3("Rotate", &rot[0], 0.0f, 2.0f)) {
+					m_particles.SetRot(rot);
+					UpdateUBOMatrices();
+				}
+
+				int32_t num = m_particles.GetMaxParticleCount();
+				if (overlay->sliderInt("Max Particle", &num, 4, 4 * 1024)) {
+					m_particles.SetMaxParticleCount(num);
+					Reset();
+				}
+				overlay->treeNodeEnd();
 			}
-			glm::vec3 rot = m_particles.GetRot();
-			if (overlay->inputFloat3("Rotate", &rot[0], 2)) {
-				m_particles.SetRot(rot);
-				UpdateUBOMatrices();
+			if (overlay->treeNodeBegin("Emission")) {
+				std::string str = m_particles.GetStr();
+				if (overlay->inputEditor("sample", (char*)str.data(), str.size()+100)) {
+					m_particles.SetStr(str);
+					//m_particles.SetMaxParticleCount(num);
+				}
+				overlay->treeNodeEnd();
 			}
-			int32_t num = m_particles.GetMaxParticleCount();
-			if (overlay->sliderInt("Max Particle", &num, 4, 4*1024)) {
-				m_particles.SetMaxParticleCount(num);
-				//UpdateUBOMatrices();
+			if (overlay->treeNodeBegin("Simulation")) {
+				overlay->treeNodeEnd();
+			}
+			if (overlay->treeNodeBegin("Appearance")) {
+				overlay->treeNodeEnd();
 			}
 		}
-		if (overlay->header("Emitter")) {
+		/*if (overlay->header("Emitter")) {
 			overlay->checkBox("Offset", &m_animate);
 			
-		}
+		}*/
 	}
 };
 

@@ -67,7 +67,7 @@ private:
 	bool resizing = false;
 	// Called if the window is resized and some resources have to be recreatesd
 	void windowResize();
-	void handleKeyDown(int32_t key);
+	void handleKeyDown(WPARAM wParam, LPARAM lParam);
 	void handleMouseMove(int32_t x, int32_t y);
 protected:
 	// Frame counter to display fps
