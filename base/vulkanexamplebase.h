@@ -68,6 +68,7 @@ private:
 	// Called if the window is resized and some resources have to be recreatesd
 	void windowResize();
 	void handleKeyDown(WPARAM wParam, LPARAM lParam);
+	void handleKeyUp(WPARAM wParam, LPARAM lParam);
 	void handleMouseMove(int32_t x, int32_t y);
 protected:
 	// Frame counter to display fps

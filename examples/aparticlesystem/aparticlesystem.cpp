@@ -47,7 +47,7 @@ class CParticleSystem
 public:
 	CParticleSystem()
 	{
-		
+		m_str. reserve(1024);
 	};
 	~CParticleSystem(){};
 	void Initial(float timer)
@@ -91,8 +91,12 @@ public:
 	uint32_t GetMaxParticleCount() { return m_max_particle_count; };
 	//uint32_t GetParticleCount() { return m_particle_count; };
 
-	void SetStr(const std::string& str) { m_str = str; };
-	const std::string& GetStr() { return m_str; };
+	void SetStr(const std::string& str)
+	{
+		m_str = str;
+		//std::cout <<"m_str:"<< m_str << std::endl;
+	};
+	std::string& GetStr() { return m_str; };
 
 private:
 	uint32_t m_age = 0;//(ms)Particle system age
@@ -1371,10 +1375,21 @@ public:
 			}
 			if (overlay->treeNodeBegin("Emission")) {
 				std::string str = m_particles.GetStr();
-				if (overlay->inputEditor("sample", (char*)str.data(), str.size()+100)) {
-					m_particles.SetStr(str);
-					//m_particles.SetMaxParticleCount(num);
+				CParticleSystem* ps_ptr = &m_particles;
+
+				//for resize
+				auto func = [](ImGuiInputTextCallbackData* data)->int {
+					delete data->Buf;
+					data->Buf = new char(data->BufSize);
+					return 0;
+				};
+				char* buffer = new char[1024];
+				str.copy(buffer, str.size());
+				buffer[str.size()] = '\0';
+				if (overlay->inputEditor("sample", buffer, 1024, func)){
+					m_particles.SetStr(buffer);
 				}
+				delete buffer;
 				overlay->treeNodeEnd();
 			}
 			if (overlay->treeNodeBegin("Simulation")) {
@@ -1384,10 +1399,6 @@ public:
 				overlay->treeNodeEnd();
 			}
 		}
-		/*if (overlay->header("Emitter")) {
-			overlay->checkBox("Offset", &m_animate);
-			
-		}*/
 	}
 };
 

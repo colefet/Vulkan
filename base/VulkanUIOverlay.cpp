@@ -8,7 +8,7 @@
 
 #include "VulkanUIOverlay.h"
 #include <functional>
-
+#include "keycodes.hpp"
 namespace vks 
 {
 	UIOverlay::UIOverlay()
@@ -48,6 +48,29 @@ namespace vks
 		// Dimensions
 		ImGuiIO& io = ImGui::GetIO();
 		io.FontGlobalScale = scale;
+
+		//key map
+		io.KeyMap[ImGuiKey_Tab] = VK_TAB;
+		io.KeyMap[ImGuiKey_LeftArrow] = VK_LEFT;
+		io.KeyMap[ImGuiKey_RightArrow] = VK_RIGHT;
+		io.KeyMap[ImGuiKey_UpArrow] = VK_UP;
+		io.KeyMap[ImGuiKey_DownArrow] = VK_DOWN;
+		io.KeyMap[ImGuiKey_PageUp] = VK_PRIOR;
+		io.KeyMap[ImGuiKey_PageDown] = VK_NEXT;
+		io.KeyMap[ImGuiKey_Home] = VK_HOME;
+		io.KeyMap[ImGuiKey_End] = VK_END;
+		io.KeyMap[ImGuiKey_Insert] = VK_INSERT;
+		io.KeyMap[ImGuiKey_Delete] = VK_DELETE;
+		io.KeyMap[ImGuiKey_Backspace] = VK_BACK;
+		io.KeyMap[ImGuiKey_Space] = VK_SPACE;
+		io.KeyMap[ImGuiKey_Enter] = VK_RETURN;
+		io.KeyMap[ImGuiKey_Escape] = VK_ESCAPE;
+		io.KeyMap[ImGuiKey_A] = KEY_A;
+		io.KeyMap[ImGuiKey_C] = KEY_C;
+		io.KeyMap[ImGuiKey_V] = KEY_V;
+		io.KeyMap[ImGuiKey_X] = KEY_X;
+		io.KeyMap[ImGuiKey_Y] = KEY_Y;
+		io.KeyMap[ImGuiKey_Z] = KEY_Z;
 	}
 
 	UIOverlay::~UIOverlay()	{ }
@@ -453,10 +476,9 @@ namespace vks
 		return res;
 	}
 
-	bool UIOverlay::inputEditor(const char* caption, char* buf, uint32_t buf_size)
+	bool UIOverlay::inputEditor(const char* caption, char* buf, uint32_t buf_size, ImGuiInputTextCallback callback)
 	{
-		std::function<void(void)> enterCallback = []{};
-		bool res = ImGui::InputTextMultiline(caption, buf, buf_size, ImVec2(0, 0));
+		bool res = ImGui::InputTextMultiline(caption, buf, buf_size, ImVec2(0, 0), 0, callback);
 		if (res) { updated = true; };
 		return res;
 	}

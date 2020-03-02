@@ -1168,7 +1168,6 @@ void VulkanExampleBase::handleMessages(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
 		//handleKeyDown(wParam);
 		break;
 	case WM_KEYDOWN:
-		keyboardButtons[wParam] = true;
 		handleKeyDown(wParam, lParam);
 		switch (wParam)
 		{
@@ -1207,7 +1206,7 @@ void VulkanExampleBase::handleMessages(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
 		keyPressed((uint32_t)wParam);
 		break;
 	case WM_KEYUP:
-		keyboardButtons[wParam] = false;
+		handleKeyUp(wParam, lParam);
 		if (camera.firstperson)
 		{
 			switch (wParam)
@@ -2238,11 +2237,25 @@ void VulkanExampleBase::windowResize()
 
 void VulkanExampleBase::handleKeyDown(WPARAM wParam, LPARAM lParam)
 {
+	keyboardButtons[wParam] = true;
+	
 	bool handled = false;
 	if (settings.overlay) {
 		ImGuiIO& io = ImGui::GetIO();
 		handled = io.WantCaptureKeyboard;
 		if (handled) {
+			switch (wParam)
+			{
+			case VK_CONTROL:
+				io.KeyCtrl = true;
+				break;
+			case VK_SHIFT:
+				io.KeyShift = true;
+				break;
+			case VK_PAUSE:
+				io.KeyAlt = true;
+				break;
+			}
 			// You can also use ToAscii()+GetKeyboardState() to retrieve characters.
 			//io.AddInputCharacter((unsigned short)key);
 
@@ -2256,6 +2269,31 @@ void VulkanExampleBase::handleKeyDown(WPARAM wParam, LPARAM lParam)
 				char c = (char)uChar;
 				std::cout << c << std::endl;
 				io.AddInputCharacter(c);
+			}
+		}
+	}
+	return;
+}
+void VulkanExampleBase::handleKeyUp(WPARAM wParam, LPARAM lParam)
+{
+	keyboardButtons[wParam] = false;
+
+	bool handled = false;
+	if (settings.overlay) {
+		ImGuiIO& io = ImGui::GetIO();
+		handled = io.WantCaptureKeyboard;
+		if (handled) {
+			switch (wParam)
+			{
+			case VK_CONTROL:
+				io.KeyCtrl = false;
+				break;
+			case VK_SHIFT:
+				io.KeyShift = false;
+				break;
+			case VK_PAUSE:
+				io.KeyAlt = false;
+				break;
 			}
 		}
 	}

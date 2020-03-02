@@ -15,6 +15,7 @@
 #include <vector>
 #include <sstream>
 #include <iomanip>
+#include <functional>
 
 #include <vulkan/vulkan.h>
 #include "VulkanTools.h"
@@ -85,7 +86,7 @@ namespace vks
 		bool checkBox(const char* caption, int32_t* value);
 		bool inputFloat(const char* caption, float* value, float step, uint32_t precision);
 		bool inputFloat3(const char* caption, float* value, uint32_t precision);
-		bool inputEditor(const char* caption, char* buf, uint32_t buf_size);
+		bool inputEditor(const char* caption, char* buf, uint32_t buf_size, ImGuiInputTextCallback callback =0);
 		bool sliderFloat(const char* caption, float* value, float min, float max);
 		bool sliderFloat3(const char* caption, float* value, float min, float max);
 		bool sliderInt(const char* caption, int32_t* value, int32_t min, int32_t max);
