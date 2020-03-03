@@ -8,6 +8,7 @@
 #include <assert.h>
 #include <vector>
 #include <random>
+#include <memory>
 
 #define GLM_FORCE_RADIANS
 #define GLM_FORCE_DEPTH_ZERO_TO_ONE
@@ -29,25 +30,112 @@
 #define MAX_PARTICLE_COUNT 256 * 1024
 #endif
 #define PI 3.1415926535898f
-class CParticle
+
+
+enum EmitShape{
+	ES_POINT,
+	ES_RING,
+};
+
+enum VelocityType {
+	VT_CONE,
+	VT_RADIAL,
+	VT_SURFACE_NORMAL,
+};
+
+class CVelocityType
 {
 public:
-	CParticle() {};
-	~CParticle() {};
+	void SetVelocityType(VelocityType velocity) { m_emit_velocity = velocity; };
+	VelocityType GetVelocityType() { return m_emit_velocity; };
+	virtual std::string GetVelocityCode() = 0;
 private:
-	//std::vector<uint32_t> m_max_life;
-	uint32_t  m_life;
-	uint32_t  m_age;
-
-	glm::vec3 m_offset = { 0.0f, 0.0f, 0.0f };
-	glm::vec3 m_velocity = { 0.0f, 0.0f, 0.0f };
+	VelocityType m_emit_velocity = VT_CONE;
 };
+
+class CVelocityTypeCone : public CVelocityType
+{
+public:
+	CVelocityTypeCone() { SetVelocityType(VT_CONE); };
+	~CVelocityTypeCone() {};
+	std::string GetVelocityCode()
+	{
+		std::string str="vec3(sin("+m_cone_radian_code +") * sin(" + m_radian_code + "), cos(" + m_cone_radian_code + "), sin(" + m_cone_radian_code + ")* cos(" + m_radian_code + "))";
+		return str;
+	}
+private:
+	float m_radian = 0;
+	float m_cone_radian = 0;
+
+	std::string m_radian_code;
+	std::string m_cone_radian_code;
+};
+
+class CEmitShape
+{
+public:
+	void SetEmitShape(EmitShape shape) { m_emit_shape = shape; };
+	EmitShape GetEmitShape() { return m_emit_shape; };
+	
+private:
+	EmitShape m_emit_shape = ES_POINT;
+};
+
+
+class CEmitShapePoint: public CEmitShape
+{
+public:
+	CEmitShapePoint() { SetEmitShape(ES_POINT); };
+	~CEmitShapePoint() {};
+	bool InitEmitVelocity(VelocityType velocity)
+	{
+		switch(velocity)
+		{
+		case VT_CONE:{
+			m_velocity_type = std::make_unique<CVelocityTypeCone>();
+		}break;
+		case VT_RADIAL:{
+				
+			}break;
+		case VT_SURFACE_NORMAL:{
+				
+			}break;
+		default:
+			return false;
+		}
+		return true;
+	}
+private:
+	std::unique_ptr<CVelocityType> m_velocity_type;
+};
+class CEmitShapeRing : public CEmitShape
+{
+public:
+	CEmitShapeRing() { SetEmitShape(ES_RING); };
+	~CEmitShapeRing() {};
+private:
+	float m_radius=0;
+	std::unique_ptr<CVelocityType> m_velocity_type;
+};
+
+//class CParticle
+//{
+//public:
+//	CParticle() {};
+//	~CParticle() {};
+//private:
+//	//std::vector<uint32_t> m_max_life;
+//	uint32_t  m_life;
+//	uint32_t  m_age;
+//
+//	glm::vec3 m_offset = { 0.0f, 0.0f, 0.0f };
+//	glm::vec3 m_velocity = { 0.0f, 0.0f, 0.0f };
+//};
 class CParticleSystem
 {
 public:
 	CParticleSystem()
 	{
-		m_str. reserve(1024);
 	};
 	~CParticleSystem(){};
 	void Initial(float timer)
@@ -75,9 +163,6 @@ public:
 		m_emitted_count += m_next_emit_count;
 	};
 	
-	uint32_t GetEmitParticleCount() { return m_next_emit_count; };
-	uint32_t GetEmitParticleLifeMax() { return m_particle_life_max; };
-	
 	const std::string& GetTex() { return m_particle_tex; }
 	const std::string& GetGradientTex() { return m_gradient_tex; }
 
@@ -91,11 +176,14 @@ public:
 	uint32_t GetMaxParticleCount() { return m_max_particle_count; };
 	//uint32_t GetParticleCount() { return m_particle_count; };
 
-	void SetStr(const std::string& str)
-	{
-		m_str = str;
-		//std::cout <<"m_str:"<< m_str << std::endl;
-	};
+	//emission
+	void SetEmitShape(EmitShape shape) { m_emit_shape = shape; };
+	EmitShape GetEmitShape() { return m_emit_shape; };
+	
+	uint32_t GetEmitParticleCount() { return m_next_emit_count; };
+	uint32_t GetEmitParticleLifeMax() { return m_particle_life_max; };
+
+	void SetStr(const std::string& str){m_str = str;};
 	std::string& GetStr() { return m_str; };
 
 private:
@@ -107,12 +195,14 @@ private:
 	//General
 	glm::vec3 m_pos = { 0.0f, 0.0f, 0.0f };
 	glm::vec3 m_rot = { 0.0f, 0.0f, 0.0f };
-	uint32_t m_max_particle_count = 1024*2;//MAX_PARTICLE_COUNT;//max particle count for this particle system	
-	uint32_t m_emit_count = 1;
-	uint32_t m_emit_interval = 1;
+	uint32_t m_max_particle_count = 1024*2;//MAX_PARTICLE_COUNT;//max particle count for this particle system
+	uint32_t m_emit_count = 1;//every time emit count
+	uint32_t m_emit_interval = 1;//emit interval (ms)
 
 	std::string m_str = "Hello World!";
-	
+
+	//
+	EmitShape m_emit_shape = ES_POINT;
 	uint32_t m_particle_life_max = 2000;
 	
 	//Appearance
@@ -1373,23 +1463,62 @@ public:
 				}
 				overlay->treeNodeEnd();
 			}
+			
 			if (overlay->treeNodeBegin("Emission")) {
-				std::string str = m_particles.GetStr();
-				CParticleSystem* ps_ptr = &m_particles;
-
-				//for resize
-				auto func = [](ImGuiInputTextCallbackData* data)->int {
-					delete data->Buf;
-					data->Buf = new char(data->BufSize);
-					return 0;
-				};
-				char* buffer = new char[1024];
-				str.copy(buffer, str.size());
-				buffer[str.size()] = '\0';
-				if (overlay->inputEditor("sample", buffer, 1024, func)){
-					m_particles.SetStr(buffer);
+				//overlay->text("Shape");
+				int32_t shape_index = m_particles.GetEmitShape();
+				if (overlay->comboBox("Shape", &shape_index, { "point", "ring" })) {
+					m_particles.SetEmitShape((EmitShape)shape_index);
+					//updateUniformBuffers();
 				}
-				delete buffer;
+				switch (shape_index) {
+				case EmitShape::ES_POINT:
+					{
+						//overlay->text("Velocity");
+						//for resize
+						auto func = [](ImGuiInputTextCallbackData* data)->int {
+							delete data->Buf;
+							data->Buf = new char(data->BufSize);
+							return 0;
+						};
+						std::string str = m_particles.GetStr();
+						char* buffer = new char[1024];
+						str.copy(buffer, str.size());
+						buffer[str.size()] = '\0';
+						if (overlay->inputEditor("Velocity", buffer, 1024, func)) {
+							m_particles.SetStr(buffer);
+						}
+						delete buffer;
+							
+						//glm::vec3 vel = glm::vec3(0, 0, 0);
+						//if (overlay->sliderFloat("##Velocity", &vel[0], 0.0f, 2.0f)) {
+						//	//updateUniformBuffers();
+						//}
+					}break;
+				case EmitShape::ES_RING:
+					{
+						//overlay->text("Radius");
+						glm::vec3 pos = glm::vec3(0, 0, 0);
+						if (overlay->sliderFloat("Radius", &pos[0], 0.0f, 2.0f)) {
+							//updateUniformBuffers();
+						}
+						
+						//overlay->text("Velocity");
+						std::string str = m_particles.GetStr();
+						char* buffer = new char[1024];
+						str.copy(buffer, str.size());
+						buffer[str.size()] = '\0';
+						if (overlay->inputEditor("Velocity", buffer, 1024)) {
+							m_particles.SetStr(buffer);
+						}
+						delete buffer;
+						
+						//glm::vec3 vel = glm::vec3(0, 0, 0);
+						//if (overlay->sliderFloat("Velocity", &vel[0], 0.0f, 2.0f)) {
+						//	//updateUniformBuffers();
+						//}
+					}break;
+				}
 				overlay->treeNodeEnd();
 			}
 			if (overlay->treeNodeBegin("Simulation")) {

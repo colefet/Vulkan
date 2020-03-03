@@ -478,7 +478,7 @@ namespace vks
 
 	bool UIOverlay::inputEditor(const char* caption, char* buf, uint32_t buf_size, ImGuiInputTextCallback callback)
 	{
-		bool res = ImGui::InputTextMultiline(caption, buf, buf_size, ImVec2(0, 0), 0, callback);
+		bool res = ImGui::InputTextMultiline(caption, buf, buf_size, ImVec2(0.0f, ImGui::GetTextLineHeight() * 2), 0, callback);
 		if (res) { updated = true; };
 		return res;
 	}
