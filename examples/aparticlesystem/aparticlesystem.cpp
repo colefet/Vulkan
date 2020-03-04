@@ -31,24 +31,17 @@
 #endif
 #define PI 3.1415926535898f
 
-
-enum EmitShape{
-	ES_POINT,
-	ES_RING,
-};
-
 enum VelocityType {
 	VT_CONE,
 	VT_RADIAL,
 	VT_SURFACE_NORMAL,
 };
-
 class CVelocityType
 {
 public:
 	void SetVelocityType(VelocityType velocity) { m_emit_velocity = velocity; };
 	VelocityType GetVelocityType() { return m_emit_velocity; };
-	virtual std::string GetVelocityCode() = 0;
+	//virtual std::string GetVelocityCode() = 0;
 private:
 	VelocityType m_emit_velocity = VT_CONE;
 };
@@ -58,19 +51,35 @@ class CVelocityTypeCone : public CVelocityType
 public:
 	CVelocityTypeCone() { SetVelocityType(VT_CONE); };
 	~CVelocityTypeCone() {};
-	std::string GetVelocityCode()
-	{
-		std::string str="vec3(sin("+m_cone_radian_code +") * sin(" + m_radian_code + "), cos(" + m_cone_radian_code + "), sin(" + m_cone_radian_code + ")* cos(" + m_radian_code + "))";
-		return str;
-	}
+	//std::string GetVelocityCode()
+	//{
+	//	//todo:transfer to bytecode and interprete
+	//	std::string str="vec3(sin("+m_cone_radian_code +") * sin(" + m_radian_code + "), cos(" + m_cone_radian_code + "), sin(" + m_cone_radian_code + ")* cos(" + m_radian_code + "))";
+	//	return str;
+	//}
+	void SetRadianCode(const std::string& str) { m_radian_code = str; }
+	const std::string& GetRadianCode() { return m_radian_code; }
+	void SetConeRadianCode(const std::string& str) { m_cone_radian_code = str; }
+	const std::string& GetConeRadianCode() { return m_cone_radian_code; }
 private:
+	//result from bytecode interpreter
 	float m_radian = 0;
 	float m_cone_radian = 0;
-
-	std::string m_radian_code;
-	std::string m_cone_radian_code;
+	//shader code for baked HLSL
+	std::string m_radian_code = "2.0";
+	std::string m_cone_radian_code = "1.0/6.0";
+};
+class CVelocityTypeRadial : public CVelocityType
+{
+public:
+	CVelocityTypeRadial() { SetVelocityType(VT_RADIAL); };
+	~CVelocityTypeRadial() {};
 };
 
+enum EmitShape {
+	ES_POINT,
+	ES_RING,
+};
 class CEmitShape
 {
 public:
@@ -81,32 +90,12 @@ private:
 	EmitShape m_emit_shape = ES_POINT;
 };
 
-
 class CEmitShapePoint: public CEmitShape
 {
 public:
 	CEmitShapePoint() { SetEmitShape(ES_POINT); };
 	~CEmitShapePoint() {};
-	bool InitEmitVelocity(VelocityType velocity)
-	{
-		switch(velocity)
-		{
-		case VT_CONE:{
-			m_velocity_type = std::make_unique<CVelocityTypeCone>();
-		}break;
-		case VT_RADIAL:{
-				
-			}break;
-		case VT_SURFACE_NORMAL:{
-				
-			}break;
-		default:
-			return false;
-		}
-		return true;
-	}
 private:
-	std::unique_ptr<CVelocityType> m_velocity_type;
 };
 class CEmitShapeRing : public CEmitShape
 {
@@ -115,22 +104,8 @@ public:
 	~CEmitShapeRing() {};
 private:
 	float m_radius=0;
-	std::unique_ptr<CVelocityType> m_velocity_type;
 };
 
-//class CParticle
-//{
-//public:
-//	CParticle() {};
-//	~CParticle() {};
-//private:
-//	//std::vector<uint32_t> m_max_life;
-//	uint32_t  m_life;
-//	uint32_t  m_age;
-//
-//	glm::vec3 m_offset = { 0.0f, 0.0f, 0.0f };
-//	glm::vec3 m_velocity = { 0.0f, 0.0f, 0.0f };
-//};
 class CParticleSystem
 {
 public:
@@ -145,7 +120,41 @@ public:
 	void Destroy(VkDevice device)
 	{
 	}
+	bool InitEmitShape(EmitShape shape)
+	{
+		switch (shape)
+		{
+		case ES_POINT: {
+			m_emit_shape = std::make_unique<CEmitShapePoint>();
+		}break;
+		case ES_RING: {
+			m_emit_shape = std::make_unique<CEmitShapeRing>();
+		}break;
+		default:
+			return false;
+		}
+		return true;
+	}
+	
+	bool InitEmitVelocity(VelocityType velocity)
+	{
+		switch (velocity)
+		{
+		case VT_CONE: {
+			m_velocity_type = std::make_unique<CVelocityTypeCone>();
+		}break;
+		case VT_RADIAL: {
+			m_velocity_type = std::make_unique<CVelocityTypeRadial>();
 
+		}break;
+		case VT_SURFACE_NORMAL: {
+
+		}break;
+		default:
+			return false;
+		}
+		return true;
+	}
 	void Reset()
 	{
 		m_age = 0;
@@ -177,14 +186,19 @@ public:
 	//uint32_t GetParticleCount() { return m_particle_count; };
 
 	//emission
-	void SetEmitShape(EmitShape shape) { m_emit_shape = shape; };
-	EmitShape GetEmitShape() { return m_emit_shape; };
+	CEmitShape* GetEmitShapeObject() { return m_emit_shape.get(); };
+	void SetEmitShape(EmitShape shape) { InitEmitShape(shape); };
+	EmitShape GetEmitShape() {if (!m_emit_shape) {return ES_POINT;}   return m_emit_shape->GetEmitShape(); };
+
+	CVelocityType* GetVelocityTypeObject() { return m_velocity_type.get(); }
+	void SetVelocityType(VelocityType velocity) { InitEmitVelocity(velocity); };
+	VelocityType GetVelocityType() { if (!m_velocity_type) { return VT_CONE; }   return m_velocity_type->GetVelocityType(); };
 	
 	uint32_t GetEmitParticleCount() { return m_next_emit_count; };
 	uint32_t GetEmitParticleLifeMax() { return m_particle_life_max; };
 
 	void SetStr(const std::string& str){m_str = str;};
-	std::string& GetStr() { return m_str; };
+	const std::string& GetStr() { return m_str; };
 
 private:
 	uint32_t m_age = 0;//(ms)Particle system age
@@ -202,7 +216,9 @@ private:
 	std::string m_str = "Hello World!";
 
 	//
-	EmitShape m_emit_shape = ES_POINT;
+	//EmitShape m_emit_shape = ES_POINT;
+	std::unique_ptr<CEmitShape> m_emit_shape;
+	std::unique_ptr<CVelocityType> m_velocity_type;
 	uint32_t m_particle_life_max = 2000;
 	
 	//Appearance
@@ -1465,15 +1481,33 @@ public:
 			}
 			
 			if (overlay->treeNodeBegin("Emission")) {
-				//overlay->text("Shape");
-				int32_t shape_index = m_particles.GetEmitShape();
-				if (overlay->comboBox("Shape", &shape_index, { "point", "ring" })) {
-					m_particles.SetEmitShape((EmitShape)shape_index);
-					//updateUniformBuffers();
+				if (overlay->treeNodeBegin("Rate")) {
+					overlay->treeNodeEnd();
 				}
-				switch (shape_index) {
-				case EmitShape::ES_POINT:
+				if (overlay->treeNodeBegin("Batch")) {
+					overlay->treeNodeEnd();
+				}
+				if (overlay->treeNodeBegin("Shape")) {
+					//overlay->text("Shape");
+					int32_t shape_index = m_particles.GetEmitShape();
+					if (overlay->comboBox("Shape", &shape_index, { "point", "ring" })) {
+						m_particles.SetEmitShape((EmitShape)shape_index);
+						//updateUniformBuffers();
+					}
+					switch (shape_index) {
+					case EmitShape::ES_POINT:
 					{
+						CEmitShapePoint* shape_obj = (CEmitShapePoint*)m_particles.GetEmitShape();
+						if (!shape_obj) { break; }
+					}break;
+					case EmitShape::ES_RING:
+					{
+						//overlay->text("Radius");
+						glm::vec3 pos = glm::vec3(0, 0, 0);
+						if (overlay->sliderFloat("Radius", &pos[0], 0.0f, 2.0f)) {
+							//updateUniformBuffers();
+						}
+
 						//overlay->text("Velocity");
 						//for resize
 						auto func = [](ImGuiInputTextCallbackData* data)->int {
@@ -1489,35 +1523,55 @@ public:
 							m_particles.SetStr(buffer);
 						}
 						delete buffer;
-							
-						//glm::vec3 vel = glm::vec3(0, 0, 0);
-						//if (overlay->sliderFloat("##Velocity", &vel[0], 0.0f, 2.0f)) {
-						//	//updateUniformBuffers();
-						//}
-					}break;
-				case EmitShape::ES_RING:
-					{
-						//overlay->text("Radius");
-						glm::vec3 pos = glm::vec3(0, 0, 0);
-						if (overlay->sliderFloat("Radius", &pos[0], 0.0f, 2.0f)) {
-							//updateUniformBuffers();
-						}
-						
-						//overlay->text("Velocity");
-						std::string str = m_particles.GetStr();
-						char* buffer = new char[1024];
-						str.copy(buffer, str.size());
-						buffer[str.size()] = '\0';
-						if (overlay->inputEditor("Velocity", buffer, 1024)) {
-							m_particles.SetStr(buffer);
-						}
-						delete buffer;
-						
+
 						//glm::vec3 vel = glm::vec3(0, 0, 0);
 						//if (overlay->sliderFloat("Velocity", &vel[0], 0.0f, 2.0f)) {
 						//	//updateUniformBuffers();
 						//}
 					}break;
+					}
+					overlay->treeNodeEnd();
+				}
+				
+				if (overlay->treeNodeBegin("Velocity")) {
+					//overlay->text("Velocity");
+					int32_t velocity_type = m_particles.GetVelocityType();
+					if (overlay->comboBox("Velocity", &velocity_type, { "cone", "radial" })) {
+						m_particles.SetVelocityType((VelocityType)velocity_type);
+						//updateUniformBuffers();
+					}
+					switch (velocity_type) {
+					case VelocityType::VT_CONE: {
+						CVelocityTypeCone* velocity_type_obj = (CVelocityTypeCone*)m_particles.GetVelocityTypeObject();
+						if (!velocity_type_obj) { break; }
+						char* buffer = new char[1024];
+						{
+							std::string str = velocity_type_obj->GetRadianCode();
+							str.copy(buffer, str.size());
+							buffer[str.size()] = '\0';
+							if (overlay->inputEditor("Radian", buffer, 1024)) {
+								velocity_type_obj->SetRadianCode(buffer);
+							}
+						}
+						{
+							std::string str = velocity_type_obj->GetConeRadianCode();
+							str.copy(buffer, str.size());
+							buffer[str.size()] = '\0';
+							if (overlay->inputEditor("ConeRadian", buffer, 1024)) {
+								velocity_type_obj->SetConeRadianCode(buffer);
+							}
+						}
+						delete buffer;
+
+						//glm::vec3 vel = glm::vec3(0, 0, 0);
+						//if (overlay->sliderFloat("##Velocity", &vel[0], 0.0f, 2.0f)) {
+						//	//updateUniformBuffers();
+						//}
+					}break;
+					case VelocityType::VT_RADIAL: {}break;
+					default:break;
+					}
+					overlay->treeNodeEnd();
 				}
 				overlay->treeNodeEnd();
 			}
