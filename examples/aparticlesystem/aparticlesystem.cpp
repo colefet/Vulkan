@@ -9,6 +9,7 @@
 #include <vector>
 #include <random>
 #include <memory>
+#include <fstream>
 
 #define GLM_FORCE_RADIANS
 #define GLM_FORCE_DEPTH_ZERO_TO_ONE
@@ -30,6 +31,36 @@
 #define MAX_PARTICLE_COUNT 256 * 1024
 #endif
 #define PI 3.1415926535898f
+
+enum EmitShape {
+	ES_POINT,
+	ES_RING,
+};
+class CEmitShape
+{
+public:
+	void SetEmitShape(EmitShape shape) { m_emit_shape = shape; };
+	EmitShape GetEmitShape() { return m_emit_shape; };
+	
+private:
+	EmitShape m_emit_shape = ES_POINT;
+};
+
+class CEmitShapePoint: public CEmitShape
+{
+public:
+	CEmitShapePoint() { SetEmitShape(ES_POINT); };
+	~CEmitShapePoint() {};
+private:
+};
+class CEmitShapeRing : public CEmitShape
+{
+public:
+	CEmitShapeRing() { SetEmitShape(ES_RING); };
+	~CEmitShapeRing() {};
+private:
+	float m_radius=0;
+};
 
 enum VelocityType {
 	VT_CONE,
@@ -75,37 +106,6 @@ public:
 	CVelocityTypeRadial() { SetVelocityType(VT_RADIAL); };
 	~CVelocityTypeRadial() {};
 };
-
-enum EmitShape {
-	ES_POINT,
-	ES_RING,
-};
-class CEmitShape
-{
-public:
-	void SetEmitShape(EmitShape shape) { m_emit_shape = shape; };
-	EmitShape GetEmitShape() { return m_emit_shape; };
-	
-private:
-	EmitShape m_emit_shape = ES_POINT;
-};
-
-class CEmitShapePoint: public CEmitShape
-{
-public:
-	CEmitShapePoint() { SetEmitShape(ES_POINT); };
-	~CEmitShapePoint() {};
-private:
-};
-class CEmitShapeRing : public CEmitShape
-{
-public:
-	CEmitShapeRing() { SetEmitShape(ES_RING); };
-	~CEmitShapeRing() {};
-private:
-	float m_radius=0;
-};
-
 class CParticleSystem
 {
 public:
@@ -468,6 +468,42 @@ public:
 		m_UBOs.Destroy();
 		m_textures.Destroy();
 		m_scene.destroy();
+	}
+
+	int FillShader() {
+		std::string path = getAssetPath() + "shaders/aparticlesystem/Test.h";
+
+		std::ifstream in;
+		in.open(path);
+
+		std::string file_str;
+		std::string line_str;
+		if (!in.is_open()) {
+			std::cout << "打开文件失败" << std::endl;
+		}
+		while (getline(in, line_str)) {
+			file_str += line_str + "\n";
+			std::string replace_start = "//Hot Update Rigion";
+			if(line_str.find(replace_start)!=std::string::npos){
+				break;
+			}
+			
+		}
+		in.close();
+
+		file_str += "float g_circle_radian =2.0;\n";
+		file_str += "float g_cone_radian = 1.0/6.0;\n";
+		file_str += "hahaha;\n";
+		file_str += "//Hot Update Rigion\n";
+
+		//write back
+		std::ofstream  out;
+		out.open(path);
+		out.flush();
+		out << file_str;
+		out.close();
+
+		return 0;
 	}
 	
 	void LoadAssets()
@@ -1490,7 +1526,7 @@ public:
 				if (overlay->treeNodeBegin("Shape")) {
 					//overlay->text("Shape");
 					int32_t shape_index = m_particles.GetEmitShape();
-					if (overlay->comboBox("Shape", &shape_index, { "point", "ring" })) {
+					if (overlay->comboBox("##Shape", &shape_index, { "point", "ring" })) {
 						m_particles.SetEmitShape((EmitShape)shape_index);
 						//updateUniformBuffers();
 					}
@@ -1502,6 +1538,9 @@ public:
 					}break;
 					case EmitShape::ES_RING:
 					{
+						CEmitShapeRing* shape_obj = (CEmitShapeRing*)m_particles.GetEmitShape();
+						if (!shape_obj) { break; }
+							
 						//overlay->text("Radius");
 						glm::vec3 pos = glm::vec3(0, 0, 0);
 						if (overlay->sliderFloat("Radius", &pos[0], 0.0f, 2.0f)) {
@@ -1536,7 +1575,7 @@ public:
 				if (overlay->treeNodeBegin("Velocity")) {
 					//overlay->text("Velocity");
 					int32_t velocity_type = m_particles.GetVelocityType();
-					if (overlay->comboBox("Velocity", &velocity_type, { "cone", "radial" })) {
+					if (overlay->comboBox("____________", &velocity_type, { "cone", "radial" })) {
 						m_particles.SetVelocityType((VelocityType)velocity_type);
 						//updateUniformBuffers();
 					}
@@ -1579,6 +1618,13 @@ public:
 				overlay->treeNodeEnd();
 			}
 			if (overlay->treeNodeBegin("Appearance")) {
+				if (overlay->button("TestCase")) {
+					FillShader();
+					/*std::string path = getAssetPath() + "shaders/aparticlesystem/generate_emit.bat";
+					system(path.c_str());
+					Reset();*/
+				}
+				
 				overlay->treeNodeEnd();
 			}
 		}
