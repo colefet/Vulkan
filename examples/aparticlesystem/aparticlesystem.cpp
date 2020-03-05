@@ -32,6 +32,21 @@
 #endif
 #define PI 3.1415926535898f
 
+
+std::string ReplaceAll(std::string str, const std::string& from, const std::string& to) {
+	size_t start_pos = 0;
+	while ((start_pos = str.find(from, start_pos)) != std::string::npos) {
+		str.replace(start_pos, from.length(), to);
+		start_pos += to.length(); // Handles case where 'to' is a substring of 'from'
+	}
+	return str;
+}
+//TODO:build map
+std::string TransferVariable(const std::string& str)
+{
+	return ReplaceAll(str, "particle_age","GetParticleAge(index)");
+}
+
 enum EmitShape {
 	ES_POINT,
 	ES_RING,
@@ -160,16 +175,19 @@ public:
 	const std::string& GetParticleScale() { return m_scale_str; };
 	std::string GetParticleScaleCode()
 	{
+		std::string scale_str = TransferVariable(m_scale_str);
+
 		std::string str;
-		str += "float g_particle_scale =" + m_scale_str + ";\n";
-		str += "float GetParicleScale()\n\
+		//str += "float g_particle_scale =" + scale_str + ";\n";
+		str += "float GetParicleScale(uint index)\n\
 {\n\
-	return  g_particle_scale;\n\
+	return  " + scale_str + ";\n\
 }\n";
 		return str;
 	};
 private:
-	std::string m_scale_str = "8.0";
+	//std::string m_scale_str = "1.0";
+	std::string m_scale_str = "mix(1.0,2.0,particle_age)";
 };
 class CParticleSystem
 {
@@ -991,7 +1009,7 @@ public:
 			VkPipelineRasterizationStateCreateInfo rasterizationState = vks::initializers::pipelineRasterizationStateCreateInfo(VK_POLYGON_MODE_FILL, VK_CULL_MODE_NONE, VK_FRONT_FACE_COUNTER_CLOCKWISE, 0);
 			VkPipelineColorBlendAttachmentState blendAttachmentState = vks::initializers::pipelineColorBlendAttachmentState(0xf, VK_FALSE);
 			VkPipelineColorBlendStateCreateInfo colorBlendState = vks::initializers::pipelineColorBlendStateCreateInfo(1, &blendAttachmentState);
-			VkPipelineDepthStencilStateCreateInfo depthStencilState = vks::initializers::pipelineDepthStencilStateCreateInfo(VK_TRUE, VK_TRUE, VK_COMPARE_OP_LESS_OR_EQUAL);
+			VkPipelineDepthStencilStateCreateInfo depthStencilState = vks::initializers::pipelineDepthStencilStateCreateInfo(VK_TRUE, VK_FALSE, VK_COMPARE_OP_LESS_OR_EQUAL);
 			VkPipelineViewportStateCreateInfo viewportState = vks::initializers::pipelineViewportStateCreateInfo(1, 1, 0);
 			VkPipelineMultisampleStateCreateInfo multisampleState = vks::initializers::pipelineMultisampleStateCreateInfo(VK_SAMPLE_COUNT_1_BIT, 0);
 			std::vector<VkDynamicState> dynamicStateEnables = { VK_DYNAMIC_STATE_VIEWPORT,VK_DYNAMIC_STATE_SCISSOR };
@@ -1710,7 +1728,7 @@ public:
 				if (overlay->treeNodeBegin("Velocity")) {
 					//overlay->text("Velocity");
 					int32_t velocity_type = m_particles.GetVelocityType();
-					if (overlay->comboBox("____________", &velocity_type, { "cone", "radial" })) {
+					if (overlay->comboBox("__________________________", &velocity_type, { "cone", "radial" })) {
 						m_particles.SetVelocityType((VelocityType)velocity_type);
 						//updateUniformBuffers();
 					}
@@ -1755,6 +1773,7 @@ public:
 			if (overlay->treeNodeBegin("Simulation")) {
 				if (overlay->button("TestCase")) {
 					//UpdateEmitShader();
+					UpdateSimulateShader();
 				}
 				overlay->treeNodeEnd();
 			}
