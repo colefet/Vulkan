@@ -41,7 +41,7 @@ class CEmitShape
 public:
 	void SetEmitShape(EmitShape shape) { m_emit_shape = shape; };
 	EmitShape GetEmitShape() { return m_emit_shape; };
-	
+	virtual std::string GetPositionCode() = 0;
 private:
 	EmitShape m_emit_shape = ES_POINT;
 };
@@ -51,6 +51,15 @@ class CEmitShapePoint: public CEmitShape
 public:
 	CEmitShapePoint() { SetEmitShape(ES_POINT); };
 	~CEmitShapePoint() {};
+	std::string GetPositionCode()
+	{
+		std::string str;
+		str += "vec3 GetEmitPosition(float particle_random)\n\
+{\n\
+	return vec3(0, 0, 0);\n\
+}\n";
+		return str;
+	}
 private:
 };
 class CEmitShapeRing : public CEmitShape
@@ -58,6 +67,7 @@ class CEmitShapeRing : public CEmitShape
 public:
 	CEmitShapeRing() { SetEmitShape(ES_RING); };
 	~CEmitShapeRing() {};
+	std::string GetPositionCode() { return ""; };
 private:
 	float m_radius=0;
 };
@@ -72,7 +82,7 @@ class CVelocityType
 public:
 	void SetVelocityType(VelocityType velocity) { m_emit_velocity = velocity; };
 	VelocityType GetVelocityType() { return m_emit_velocity; };
-	//virtual std::string GetVelocityCode() = 0;
+	virtual std::string GetVelocityCode() = 0;
 private:
 	VelocityType m_emit_velocity = VT_CONE;
 };
@@ -82,35 +92,73 @@ class CVelocityTypeCone : public CVelocityType
 public:
 	CVelocityTypeCone() { SetVelocityType(VT_CONE); };
 	~CVelocityTypeCone() {};
-	//std::string GetVelocityCode()
-	//{
-	//	//todo:transfer to bytecode and interprete
-	//	std::string str="vec3(sin("+m_cone_radian_code +") * sin(" + m_radian_code + "), cos(" + m_cone_radian_code + "), sin(" + m_cone_radian_code + ")* cos(" + m_radian_code + "))";
-	//	return str;
-	//}
-	void SetRadianCode(const std::string& str) { m_radian_code = str; }
-	const std::string& GetRadianCode() { return m_radian_code; }
-	void SetConeRadianCode(const std::string& str) { m_cone_radian_code = str; }
-	const std::string& GetConeRadianCode() { return m_cone_radian_code; }
+
+	std::string GetRadianCode()
+	{
+		std::string str;
+		str += "float g_circle_radian ="+ m_radian_str +";\n";
+		str += "float GetCircleRadian(float particle_random)\n\
+{\n\
+	return rand(vec2(uboEmitter.randomSeed, particle_random)) * PI * g_circle_radian;\n\
+}\n";
+		return str;
+	}
+	std::string GetConeRadianCode()
+	{
+		std::string str;
+		str += "float g_cone_radian =" + m_cone_radian_str + ";\n";
+		str += "float GetConeRadian(float particle_random)\n\
+{\n\
+	return rand(vec2(uboEmitter.randomSeed+0.123251,particle_random+0.054385))*PI*g_cone_radian;\n\
+}\n";
+		return str;
+	}
+	std::string GetVelocityCode()
+	{
+		//todo:transfer to bytecode and interprete
+		//std::string str="vec3(sin("+m_cone_radian_code +") * sin(" + m_radian_code + "), cos(" + m_cone_radian_code + "), sin(" + m_cone_radian_code + ")* cos(" + m_radian_code + "))";
+
+		std::string str;
+		str += GetRadianCode();
+		str += GetConeRadianCode();
+		str+= "vec3 GetEmitVelocity(float particle_random)\n\
+{\n\
+	float radian = GetCircleRadian(particle_random);\n\
+	float cone_radian = GetConeRadian(particle_random);\n\
+	vec3 vel = vec3(\n\
+		sin(cone_radian) * sin(radian),\n\
+		cos(cone_radian),\n\
+		sin(cone_radian) * cos(radian));\n\
+	return vel;\n\
+}\n";
+		return str;
+	}
+	void SetRadian(const std::string& str) { m_radian_str = str; }
+	const std::string& GetRadian() { return m_radian_str; }
+	void SetConeRadian(const std::string& str) { m_cone_radian_str = str; }
+	const std::string& GetConeRadian() { return m_cone_radian_str; }
 private:
 	//result from bytecode interpreter
 	float m_radian = 0;
 	float m_cone_radian = 0;
 	//shader code for baked HLSL
-	std::string m_radian_code = "2.0";
-	std::string m_cone_radian_code = "1.0/6.0";
+	std::string m_radian_str = "2.0";
+	std::string m_cone_radian_str = "1.0/6.0";
 };
 class CVelocityTypeRadial : public CVelocityType
 {
 public:
 	CVelocityTypeRadial() { SetVelocityType(VT_RADIAL); };
 	~CVelocityTypeRadial() {};
+	std::string GetVelocityCode() { return ""; };
 };
 class CParticleSystem
 {
 public:
 	CParticleSystem()
 	{
+		InitEmitShape(ES_POINT);
+		InitEmitVelocity(VT_CONE);
 	};
 	~CParticleSystem(){};
 	void Initial(float timer)
@@ -470,8 +518,16 @@ public:
 		m_scene.destroy();
 	}
 
-	int FillShader() {
-		std::string path = getAssetPath() + "shaders/aparticlesystem/Test.h";
+	std::string GetEmitCode()
+	{
+		std::string str;
+		str += m_particles.GetEmitShapeObject()->GetPositionCode();
+		str += m_particles.GetVelocityTypeObject()->GetVelocityCode();
+		return str;
+	}
+	
+	int FillEmitShader() {
+		std::string path = getAssetPath() + "shaders/aparticlesystem/particle_emit_param.h";
 
 		std::ifstream in;
 		in.open(path);
@@ -491,10 +547,9 @@ public:
 		}
 		in.close();
 
-		file_str += "float g_circle_radian =2.0;\n";
-		file_str += "float g_cone_radian = 1.0/6.0;\n";
-		file_str += "hahaha;\n";
-		file_str += "//Hot Update Rigion\n";
+		//file_str += "float g_circle_radian =2.0;\n";
+		//file_str += "float g_cone_radian = 1.0/6.0;\n";
+		file_str += GetEmitCode();
 
 		//write back
 		std::ofstream  out;
@@ -504,6 +559,13 @@ public:
 		out.close();
 
 		return 0;
+	}
+	void UpdateEmitShader()
+	{
+		FillEmitShader();
+		std::string path = getAssetPath() + "shaders/aparticlesystem/generate_emit.bat";
+		system(path.c_str());
+		Reset();
 	}
 	
 	void LoadAssets()
@@ -1585,19 +1647,19 @@ public:
 						if (!velocity_type_obj) { break; }
 						char* buffer = new char[1024];
 						{
-							std::string str = velocity_type_obj->GetRadianCode();
+							std::string str = velocity_type_obj->GetRadian();
 							str.copy(buffer, str.size());
 							buffer[str.size()] = '\0';
 							if (overlay->inputEditor("Radian", buffer, 1024)) {
-								velocity_type_obj->SetRadianCode(buffer);
+								velocity_type_obj->SetRadian(buffer);
 							}
 						}
 						{
-							std::string str = velocity_type_obj->GetConeRadianCode();
+							std::string str = velocity_type_obj->GetConeRadian();
 							str.copy(buffer, str.size());
 							buffer[str.size()] = '\0';
 							if (overlay->inputEditor("ConeRadian", buffer, 1024)) {
-								velocity_type_obj->SetConeRadianCode(buffer);
+								velocity_type_obj->SetConeRadian(buffer);
 							}
 						}
 						delete buffer;
@@ -1610,6 +1672,9 @@ public:
 					case VelocityType::VT_RADIAL: {}break;
 					default:break;
 					}
+					if (overlay->button("Done")) {
+						UpdateEmitShader();
+					}
 					overlay->treeNodeEnd();
 				}
 				overlay->treeNodeEnd();
@@ -1619,10 +1684,7 @@ public:
 			}
 			if (overlay->treeNodeBegin("Appearance")) {
 				if (overlay->button("TestCase")) {
-					FillShader();
-					/*std::string path = getAssetPath() + "shaders/aparticlesystem/generate_emit.bat";
-					system(path.c_str());
-					Reset();*/
+					UpdateEmitShader();
 				}
 				
 				overlay->treeNodeEnd();

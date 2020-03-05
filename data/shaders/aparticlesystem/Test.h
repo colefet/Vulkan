@@ -1,5 +1,3 @@
-#include "particle_common.h"
-
 layout (binding = 0) uniform UBOEmitter
 {
 	uint emitCount;
@@ -8,10 +6,11 @@ layout (binding = 0) uniform UBOEmitter
 	float padding2;
 } uboEmitter;
 
-
-float rand(vec2 co){return fract(sin(dot(co.xy ,vec2(12.9898,78.233))) * 43758.5453);}
-
-vec3 GetEmitPosition()
+//Hot Update Rigion
+float g_circle_radian =2.0;
+float g_cone_radian = 1.0/6.0;
+//~Hot Update Rigion
+vec3 GetEmitPosition(float particle_random)
 {
     //point
     return vec3(0,0,0);
@@ -25,13 +24,13 @@ vec3 GetEmitPosition()
 float GetCircleRadian(float particle_random)
 {
     float value =2;
-    return rand(vec2(uboEmitter.randomSeed, particle_random ))*PI*value;
+    return rand(vec2(uboEmitter.randomSeed, particle_random ))*PI*g_circle_radian;
 }
 //phi in shperical coordinate system
 float GetConeRadian(float particle_random)
 {
     float value = 1.0/6.0;
-    return rand(vec2(uboEmitter.randomSeed+0.123251,particle_random+0.054385))*PI*value;
+    return rand(vec2(uboEmitter.randomSeed+0.123251,particle_random+0.054385))*PI*g_cone_radian;
 }
 vec3 GetEmitVelocity(float particle_random)
 {
