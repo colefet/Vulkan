@@ -51,9 +51,10 @@ void main()
     ssboParticle.particles[newParticleIndex].vel = GetEmitVelocity(float(index/256));
     ssboParticle.particles[newParticleIndex].lifeMax = uboEmitter.particleLifeMax;
     ssboParticle.particles[newParticleIndex].life = uboEmitter.particleLifeMax;
-	ssboParticle.particles[newParticleIndex].gradientUV = vec4(
+	ssboParticle.particles[newParticleIndex].param0 = vec4(
         rand(vec2(uboEmitter.randomSeed+0.043155,float(index/256)+0.081238)),
-        0,0,0);
+        1.0,
+        0,0);
 
     // and add index to the alive list (push):
     uint alive_count = atomicAdd(ssboCounter.aliveCount,1);

@@ -152,6 +152,25 @@ public:
 	~CVelocityTypeRadial() {};
 	std::string GetVelocityCode() { return ""; };
 };
+
+class CParticleScale
+{
+public:
+	void SetParticleScale(const std::string& str) { m_scale_str = str; };
+	const std::string& GetParticleScale() { return m_scale_str; };
+	std::string GetParticleScaleCode()
+	{
+		std::string str;
+		str += "float g_particle_scale =" + m_scale_str + ";\n";
+		str += "float GetParicleScale()\n\
+{\n\
+	return  g_particle_scale;\n\
+}\n";
+		return str;
+	};
+private:
+	std::string m_scale_str = "8.0";
+};
 class CParticleSystem
 {
 public:
@@ -159,6 +178,7 @@ public:
 	{
 		InitEmitShape(ES_POINT);
 		InitEmitVelocity(VT_CONE);
+		m_particle_scale = std::make_unique<CParticleScale>();
 	};
 	~CParticleSystem(){};
 	void Initial(float timer)
@@ -247,6 +267,8 @@ public:
 
 	void SetStr(const std::string& str){m_str = str;};
 	const std::string& GetStr() { return m_str; };
+	//Appearance
+	CParticleScale* GetParticleScaleObject() { return m_particle_scale.get(); };
 
 private:
 	uint32_t m_age = 0;//(ms)Particle system age
@@ -272,6 +294,7 @@ private:
 	//Appearance
 	std::string m_particle_tex = "textures/particle01_rgba.ktx";
 	std::string m_gradient_tex = "textures/particle_gradient_rgba.ktx";
+	std::unique_ptr<CParticleScale> m_particle_scale;
 };
 
 class VulkanExample : public VulkanExampleBase
@@ -517,7 +540,7 @@ public:
 		m_textures.Destroy();
 		m_scene.destroy();
 	}
-
+	//generate emit shader code
 	std::string GetEmitCode()
 	{
 		std::string str;
@@ -564,6 +587,56 @@ public:
 	{
 		FillEmitShader();
 		std::string path = getAssetPath() + "shaders/aparticlesystem/generate_emit.bat";
+		system(path.c_str());
+		Reset();
+	}
+
+	//generate simulate shader code
+	std::string GetSimulateCode()
+	{
+		std::string str;
+		str += m_particles.GetParticleScaleObject()->GetParticleScaleCode();
+		return str;
+	}
+
+	int FillSimulateShader() {
+		std::string path = getAssetPath() + "shaders/aparticlesystem/particle_simulate_param.h";
+
+		std::ifstream in;
+		in.open(path);
+
+		std::string file_str;
+		std::string line_str;
+		if (!in.is_open()) {
+			std::cout << "打开文件失败" << std::endl;
+		}
+		while (getline(in, line_str)) {
+			file_str += line_str + "\n";
+			std::string replace_start = "//Hot Update Rigion";
+			if (line_str.find(replace_start) != std::string::npos) {
+				break;
+			}
+
+		}
+		in.close();
+
+		//file_str += "float g_circle_radian =2.0;\n";
+		//file_str += "float g_cone_radian = 1.0/6.0;\n";
+		file_str += GetSimulateCode();
+
+		//write back
+		std::ofstream  out;
+		out.open(path);
+		out.flush();
+		out << file_str;
+		out.close();
+
+		return 0;
+	}
+	void UpdateSimulateShader()
+	{
+		FillSimulateShader();
+		std::string path = getAssetPath() + "shaders/aparticlesystem/generate_simulate.bat";
 		system(path.c_str());
 		Reset();
 	}
@@ -1680,13 +1753,30 @@ public:
 				overlay->treeNodeEnd();
 			}
 			if (overlay->treeNodeBegin("Simulation")) {
+				if (overlay->button("TestCase")) {
+					//UpdateEmitShader();
+				}
 				overlay->treeNodeEnd();
 			}
 			if (overlay->treeNodeBegin("Appearance")) {
-				if (overlay->button("TestCase")) {
-					UpdateEmitShader();
+				if (overlay->treeNodeBegin("Color")) {
+					overlay->treeNodeEnd();
 				}
-				
+				if (overlay->treeNodeBegin("Size")) {
+					CParticleScale* particle_scale_obj = (CParticleScale*)m_particles.GetParticleScaleObject();
+					if (particle_scale_obj)
+					{
+						char* buffer = new char[1024];
+						std::string str = particle_scale_obj->GetParticleScale();
+						str.copy(buffer, str.size());
+						buffer[str.size()] = '\0';
+						if (overlay->inputEditor("Scale", buffer, 1024)) {
+							particle_scale_obj->SetParticleScale(buffer);
+						}
+						delete buffer;
+					}
+					overlay->treeNodeEnd();
+				}
 				overlay->treeNodeEnd();
 			}
 		}

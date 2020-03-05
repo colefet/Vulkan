@@ -6,7 +6,7 @@ struct Particle
     float lifeMax;
 	vec3 vel;
     float life;
-	vec4 gradientUV;
+	vec4 param0;//x:gradient U y:scale
 };
 void SetVec4Element(inout uvec4 vec, uint mod_value, uint value) {
     if(mod_value==0){

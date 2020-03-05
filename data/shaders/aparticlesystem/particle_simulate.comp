@@ -1,14 +1,8 @@
 #version 450
 #extension GL_GOOGLE_include_directive : enable
 #include "particle_common.h"
-
-layout (binding = 0) uniform UBOSimulate
-{
-	float deltaT;
-	float destX;
-	float destY;
-	int padding0;
-} uboSimulate;
+#include "particle_simulate_declare.h"
+#include "particle_simulate_param.h"
 
 //Particle storage buffer
 layout(std140, binding = 1) buffer SSBOParticle 
@@ -99,9 +93,9 @@ void main()
         // Write back
         ssboParticle.particles[particleIndex].pos.xyz = vPos;
         ssboParticle.particles[particleIndex].vel.xyz = vVel.xyz;
-        ssboParticle.particles[particleIndex].gradientUV.x += 0.02 * dt_speed;
-        if (ssboParticle.particles[particleIndex].gradientUV.x > 1.0){
-            ssboParticle.particles[particleIndex].gradientUV.x -= 1.0;
+        ssboParticle.particles[particleIndex].param0.x += 0.02 * dt_speed;
+        if (ssboParticle.particles[particleIndex].param0.x > 1.0){
+            ssboParticle.particles[particleIndex].param0.x -= 1.0;
         }
         ssboParticle.particles[particleIndex].life -= dt;
 
